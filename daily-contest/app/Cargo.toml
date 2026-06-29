@@ -1,0 +1,14 @@
+[package]
+name = "daily-contest-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sails-rs = "=0.10.2"
+parity-scale-codec = { version = "3", default-features = false, features = ["derive"] }
+scale-info = { version = "2", default-features = false }
+thiserror = { version = "2", default-features = false }
+
+[build-dependencies]
+sails-rs = { version = "=0.10.2", features = ["build"] }
+sails-idl-gen = "=0.10.2"

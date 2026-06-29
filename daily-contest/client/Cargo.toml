@@ -1,0 +1,11 @@
+[package]
+name = "daily-contest-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sails-rs = "=0.10.2"
+
+[build-dependencies]
+daily-contest-app = { path = "../app" }
+sails-rs = { version = "=0.10.2", features = ["build"] }

@@ -1,0 +1,13 @@
+[package]
+name = "polymarket-mirror-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Generated Rust client for the polymarket-mirror program"
+license = "MIT"
+
+[dependencies]
+sails-rs = "=0.10.2"
+
+[build-dependencies]
+sails-rs = { version = "=0.10.2", features = ["build"] }

@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["app", "client"]
+
+[package]
+name = "daily-contest"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+daily-contest-app = { path = "app" }
+
+[dev-dependencies]
+daily-contest-client = { path = "client" }
+gtest = "1.10.0"
+futures = "0.3.31"
+sails-rs = { version = "=0.10.2", features = ["gtest", "gclient"] }
+tokio = "1.48.0"
+
+[build-dependencies]
+sails-rs = { version = "=0.10.2", features = ["build"] }
+sails-idl-gen = "=0.10.2"
+daily-contest-app = { path = "app" }
+
+[features]
+wasm-binary = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = 3
+strip = true

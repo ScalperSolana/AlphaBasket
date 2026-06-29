@@ -1,0 +1,20 @@
+{
+  "name": "polybaskets-contest-bot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@gear-js/api": "^0.43.0",
+    "@polkadot/api": "^16.4.3",
+    "@polkadot/types": "^16.4.3",
+    "sails-js": "^0.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "typescript": "^5.5.2"
+  }
+}

@@ -1,0 +1,82 @@
+type FreebetLedgerInit = struct {
+  admin: actor_id,
+};
+
+type SignedVaraBetQuote = struct {
+  payload: VaraBetQuotePayload,
+  signature: vec u8,
+};
+
+type VaraBetQuotePayload = struct {
+  target_program_id: actor_id,
+  user: actor_id,
+  basket_id: u64,
+  amount: u128,
+  quoted_index_bps: u16,
+  earliest_end_timestamp: u64,
+  deadline_ms: u64,
+  nonce: u128,
+};
+
+type FreebetGrant = struct {
+  id: str,
+  recipient: actor_id,
+  amount: u128,
+  reason: str,
+  granted_at: u64,
+};
+
+constructor {
+  New : (init: FreebetLedgerInit);
+};
+
+service FreebetLedger {
+  AuthorizeBetProgram : (program_id: actor_id) -> null;
+  Grant : (to: actor_id, grant_id: str, reason: str) -> u128;
+  ReturnFreebet : (user: actor_id, basket_id: u64) -> u128;
+  RevokeBetProgram : (program_id: actor_id) -> null;
+  SpendFreebet : (bet_program_id: actor_id, basket_id: u64, amount: u128, signed_quote: SignedVaraBetQuote) -> u128;
+  query Admin : () -> actor_id;
+  query BalanceOf : (user: actor_id) -> u128;
+  query GetGrant : (grant_id: str) -> opt FreebetGrant;
+  query GetPendingSpendCount : () -> u64;
+  query IsBetProgramAuthorized : (program_id: actor_id) -> bool;
+
+  events {
+    BetProgramAuthorized: struct {
+      program_id: actor_id
+    };
+    BetProgramRevoked: struct {
+      program_id: actor_id
+    };
+    FreebetGranted: struct {
+      recipient: actor_id,
+      amount: u128,
+      balance: u128,
+      grant_id: str,
+      reason: str,
+    };
+    FreebetSpent: struct {
+      user: actor_id,
+      bet_program_id: actor_id,
+      basket_id: u64,
+      amount: u128,
+      remaining_balance: u128,
+    };
+    FreebetReturned: struct {
+      user: actor_id,
+      bet_program_id: actor_id,
+      basket_id: u64,
+      amount: u128,
+      balance: u128,
+    };
+    FreebetSpendFailed: struct {
+      user: actor_id,
+      bet_program_id: actor_id,
+      basket_id: u64,
+      amount: u128,
+      restored_balance: u128,
+    };
+  }
+};
+

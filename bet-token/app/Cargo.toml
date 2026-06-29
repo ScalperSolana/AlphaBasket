@@ -1,0 +1,21 @@
+[package]
+name = "bet-token-app"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Package containing business logic for the program"
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sails-rs.workspace = true
+awesome-sails-access-control = "0.2.0"
+awesome-sails-storage = "0.2.0"
+awesome-sails-utils = "0.2.0"
+awesome-sails-vft = "0.2.0"
+awesome-sails-vft-admin = "0.2.0"
+awesome-sails-vft-metadata = "0.2.0"
+thiserror = { version = "=2.0.17", default-features = false }

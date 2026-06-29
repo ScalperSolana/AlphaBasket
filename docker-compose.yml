@@ -1,0 +1,190 @@
+x-indexer-env: &indexer-env
+  NODE_ENV: production
+  DATABASE_URL: postgres://${DB_USER:-postgres}:${DB_PASS:-postgres}@postgres:5432/${DB_NAME:-polybaskets_indexer}
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_USER: ${DB_USER:-postgres}
+  DB_PASS: ${DB_PASS:-postgres}
+  DB_NAME: ${DB_NAME:-polybaskets_indexer}
+  INDEXER_GQL_PORT: 4350
+  FRONTEND_URLS: ${FRONTEND_URLS}
+  VARA_ARCHIVE_URL: ${VARA_ARCHIVE_URL}
+  SQD_API_KEY: ${SQD_API_KEY}
+  VARA_RPC_URL: ${VARA_RPC_URL}
+  VARA_RPC_RATE_LIMIT: ${VARA_RPC_RATE_LIMIT:-20}
+  VARA_FROM_BLOCK: ${VARA_FROM_BLOCK}
+  BASKET_MARKET_PROGRAM_ID: ${BASKET_MARKET_PROGRAM_ID}
+  BET_LANE_PROGRAM_ID: ${BET_LANE_PROGRAM_ID}
+  BET_TOKEN_PROGRAM_ID: ${BET_TOKEN_PROGRAM_ID:-}
+  VITE_BET_TOKEN_PROGRAM_ID: ${VITE_BET_TOKEN_PROGRAM_ID:-}
+  DAILY_CONTEST_PROGRAM_ID: ${DAILY_CONTEST_PROGRAM_ID}
+  BASKET_MARKET_IDL_PATH: /app/program/polymarket-mirror.idl
+  BET_LANE_IDL_PATH: /app/bet-lane/client/bet_lane_client.idl
+  BET_TOKEN_IDL_PATH: /app/bet-token/client/bet_token_client.idl
+  DAILY_CONTEST_IDL_PATH: /app/daily-contest/daily-contest.idl
+  CONTEST_GRACE_PERIOD_MS: ${CONTEST_GRACE_PERIOD_MS:-1800000}
+
+x-shared-bot-secret-env: &shared-bot-secret-env
+  SETTLER_SEED: ${SETTLER_SEED:-}
+  SETTLER_SEED_FILE: ${SETTLER_SEED_FILE:-}
+
+x-bet-quote-secret-env: &bet-quote-secret-env
+  BET_QUOTE_SIGNER_SEED: ${BET_QUOTE_SIGNER_SEED:-}
+  BET_QUOTE_SIGNER_SEED_FILE: ${BET_QUOTE_SIGNER_SEED_FILE:-}
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: polybaskets-daily-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-polybaskets_indexer}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - daily_contest_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-polybaskets_indexer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  indexer-migrate:
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile
+    container_name: polybaskets-daily-indexer-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/indexer
+    environment:
+      <<: *indexer-env
+    command: ["npm", "run", "migration:run"]
+
+  indexer-processor:
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile
+    container_name: polybaskets-daily-indexer-processor
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      indexer-migrate:
+        condition: service_completed_successfully
+    working_dir: /app/indexer
+    environment:
+      <<: *indexer-env
+    command: ["npm", "run", "processor"]
+
+  indexer-api:
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile
+    container_name: polybaskets-daily-indexer-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      indexer-migrate:
+        condition: service_completed_successfully
+    working_dir: /app/indexer
+    environment:
+      <<: *indexer-env
+      PORT: 4350
+      INDEXER_GRAPHIQL_ENABLED: ${INDEXER_GRAPHIQL_ENABLED:-true}
+    command: ["npm", "run", "serve"]
+    ports:
+      - "127.0.0.1:${INDEXER_GQL_PORT:-4350}:4350"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4350/graphql',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:'query { allIndexerStates(first: 1) { nodes { id } } }'})}).then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  contest-bot:
+    build:
+      context: .
+      dockerfile: contest-bot/Dockerfile
+    container_name: polybaskets-daily-contest-bot
+    restart: unless-stopped
+    depends_on:
+      indexer-api:
+        condition: service_healthy
+      indexer-processor:
+        condition: service_started
+    working_dir: /app/contest-bot
+    environment:
+      <<: *shared-bot-secret-env
+      DAILY_CONTEST_PROGRAM_ID: ${DAILY_CONTEST_PROGRAM_ID}
+      VARA_RPC_URL: ${VARA_RPC_URL}
+      CONTEST_BOT_POLL_INTERVAL_MS: ${CONTEST_BOT_POLL_INTERVAL_MS:-30000}
+      INDEXER_GRAPHQL_ENDPOINT: http://indexer-api:4350/graphql
+    command: ["npm", "start"]
+
+  settler-bot:
+    build:
+      context: .
+      dockerfile: settler-bot/Dockerfile
+    container_name: polybaskets-daily-settler-bot
+    restart: unless-stopped
+    working_dir: /app/settler-bot
+    environment:
+      <<: *shared-bot-secret-env
+      VARA_RPC_URL: ${VARA_RPC_URL}
+      BASKET_MARKET_PROGRAM_ID: ${BASKET_MARKET_PROGRAM_ID}
+      SETTLER_BOT_POLL_INTERVAL_MS: ${SETTLER_BOT_POLL_INTERVAL_MS:-30000}
+      SETTLER_BOT_FINALIZE_ENABLED: ${SETTLER_BOT_FINALIZE_ENABLED:-true}
+      VARA_RECONNECT_ATTEMPTS: ${VARA_RECONNECT_ATTEMPTS:-5}
+      VARA_RECONNECT_DELAY_MS: ${VARA_RECONNECT_DELAY_MS:-1000}
+      VARA_RECONNECT_MAX_DELAY_MS: ${VARA_RECONNECT_MAX_DELAY_MS:-10000}
+      POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
+    command: ["npm", "start"]
+
+  bet-quote-service:
+    build:
+      context: .
+      dockerfile: bet-quote-service/Dockerfile
+    container_name: polybaskets-daily-bet-quote-service
+    restart: unless-stopped
+    working_dir: /app/bet-quote-service
+    environment:
+      <<: *bet-quote-secret-env
+      PORT: ${BET_QUOTE_SERVICE_PORT:-4360}
+      FRONTEND_URLS: ${FRONTEND_URLS}
+      VARA_RPC_URL: ${VARA_RPC_URL}
+      BASKET_MARKET_PROGRAM_ID: ${BASKET_MARKET_PROGRAM_ID}
+      BET_LANE_PROGRAM_ID: ${BET_LANE_PROGRAM_ID}
+      POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
+      BET_QUOTE_TTL_MS: ${BET_QUOTE_TTL_MS:-30000}
+      BET_QUOTE_BINDING_PREFIX: ${BET_QUOTE_BINDING_PREFIX:-BetLaneQuoteV1}
+      VARA_RECONNECT_ATTEMPTS: ${VARA_RECONNECT_ATTEMPTS:-5}
+      VARA_RECONNECT_DELAY_MS: ${VARA_RECONNECT_DELAY_MS:-1000}
+      VARA_RECONNECT_MAX_DELAY_MS: ${VARA_RECONNECT_MAX_DELAY_MS:-10000}
+    command: ["npm", "start"]
+    ports:
+      - "127.0.0.1:${BET_QUOTE_SERVICE_PORT:-4360}:4360"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4360/healthz').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  daily_contest_postgres:

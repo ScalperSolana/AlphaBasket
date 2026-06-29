@@ -1,0 +1,17 @@
+:{$PORT}
+
+# Proxy Polymarket API requests
+handle /gamma/* {
+    uri strip_prefix /gamma
+    reverse_proxy https://gamma-api.polymarket.com {
+        header_up Host gamma-api.polymarket.com
+        header_up Origin https://gamma-api.polymarket.com
+    }
+}
+
+# Serve static files
+handle {
+    root * /app/dist
+    try_files {path} /index.html
+    file_server
+}
