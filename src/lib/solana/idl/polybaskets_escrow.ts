@@ -143,7 +143,7 @@ export type PolybasketsEscrow = {
     {
       "name": "createBasket",
       "docs": [
-        "Create a basket and its dedicated USDC vault."
+        "Create a basket and its dedicated USDC vault, storing its composition."
       ],
       "discriminator": [
         47,
@@ -243,6 +243,16 @@ export type PolybasketsEscrow = {
               "u8",
               32
             ]
+          }
+        },
+        {
+          "name": "items",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "basketItem"
+              }
+            }
           }
         }
       ]
@@ -1033,6 +1043,16 @@ export type PolybasketsEscrow = {
     },
     {
       "code": 6019,
+      "name": "invalidBasketItems",
+      "msg": "Basket items are missing, too many, or malformed"
+    },
+    {
+      "code": 6020,
+      "name": "invalidBasketWeights",
+      "msg": "Basket item weights must sum to 10000 bps"
+    },
+    {
+      "code": 6021,
       "name": "mathOverflow",
       "msg": "Arithmetic overflow"
     }
@@ -1040,9 +1060,6 @@ export type PolybasketsEscrow = {
   "types": [
     {
       "name": "basket",
-      "docs": [
-        "Per-basket account (PDA at seeds `[\"basket\", basket_id]`)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1069,24 +1086,14 @@ export type PolybasketsEscrow = {
           },
           {
             "name": "settlementIndexBps",
-            "docs": [
-              "Final settlement index, set on finalize_settlement."
-            ],
             "type": "u16"
           },
           {
             "name": "proposedIndexBps",
-            "docs": [
-              "Pending index proposed by the oracle; promoted to settlement_index_bps",
-              "once the challenge window elapses."
-            ],
             "type": "u16"
           },
           {
             "name": "settlementProposedAt",
-            "docs": [
-              "Unix timestamp of the latest propose_settlement call (0 if none)."
-            ],
             "type": "i64"
           },
           {
@@ -1096,6 +1103,19 @@ export type PolybasketsEscrow = {
           {
             "name": "createdAt",
             "type": "i64"
+          },
+          {
+            "name": "items",
+            "docs": [
+              "Basket composition (Polymarket markets + weights), set at creation."
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "basketItem"
+                }
+              }
+            }
           },
           {
             "name": "bump",
@@ -1130,10 +1150,41 @@ export type PolybasketsEscrow = {
       }
     },
     {
-      "name": "basketStatus",
+      "name": "basketItem",
       "docs": [
-        "Lifecycle of a basket's settlement."
+        "One constituent of a basket: a Polymarket market + the outcome bet on + weight.",
+        "Stored on-chain so the settler/quote services read composition directly from",
+        "the program (no off-chain registry needed)."
       ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "marketId",
+            "docs": [
+              "Polymarket market id (the value the off-chain services fetch by)."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "outcome",
+            "docs": [
+              "Outcome bet on: 0 = NO, 1 = YES."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "weightBps",
+            "docs": [
+              "Weight in basis points (1..=10000)."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "basketStatus",
       "type": {
         "kind": "enum",
         "variants": [
@@ -1176,9 +1227,6 @@ export type PolybasketsEscrow = {
     },
     {
       "name": "config",
-      "docs": [
-        "Global program config (singleton PDA at seeds `[\"config\"]`)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1211,9 +1259,6 @@ export type PolybasketsEscrow = {
     },
     {
       "name": "position",
-      "docs": [
-        "Per-(basket, user) position (PDA at seeds `[\"position\", basket_id, owner]`)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1354,9 +1399,7 @@ export type PolybasketsEscrow = {
       "name": "challengeWindowSecs",
       "docs": [
         "Settlement challenge window: the delay (in seconds) that must elapse between",
-        "propose_settlement and finalize_settlement. Hardcoded in the contract and",
-        "also exported into the IDL `constants` array so off-chain scripts can read",
-        "it without an extra account fetch."
+        "propose_settlement and finalize_settlement."
       ],
       "type": "i64",
       "value": "12"

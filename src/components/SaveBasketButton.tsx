@@ -184,7 +184,11 @@ export function SaveBasketButton({ marketProbabilities, marketPrices }: SaveBask
 
       // Create the basket + vault on-chain if needed, fetch a signed entry-index
       // quote, then stake (Ed25519 verify + stake in one tx).
-      await ensureBasket(anchorWallet, idBytes);
+      await ensureBasket(
+        anchorWallet,
+        idBytes,
+        items.map((item) => ({ marketId: item.marketId, outcome: item.outcome, weightBps: item.weightBps })),
+      );
       const quote = await getSignedQuote({
         basketIdBytes: idBytes,
         owner: anchorWallet.publicKey,

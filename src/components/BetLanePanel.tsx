@@ -19,7 +19,6 @@ import {
 import { toUsdcUnits, fromUsdcUnits } from '@/lib/solana/usdc.ts';
 import {
   basketIdBytes,
-  ensureBasket,
   stakeWithQuote,
   claimPosition,
 } from '@/lib/solana/escrowProgram.ts';
@@ -131,7 +130,8 @@ export function BetLanePanel({
     setBettingPhase('betting');
     try {
       const idBytes = await basketIdBytes(basketId);
-      await ensureBasket(anchorWallet, idBytes);
+      // The basket is created on-chain (with its composition) by its creator at
+      // save time, so it already exists here; we only stake.
       const quote = await getSignedQuote({
         basketIdBytes: idBytes,
         owner: anchorWallet.publicKey,

@@ -3,8 +3,9 @@ import {
   Program,
   BN,
   type Idl,
-  type Wallet as AnchorWallet,
+  type Wallet,
 } from '@coral-xyz/anchor';
+import type { AnchorWallet } from '@solana/wallet-adapter-react';
 import {
   Connection,
   PublicKey,
@@ -50,7 +51,7 @@ export function readonlyProgram(): Program<PolybasketsEscrow> {
   const provider = new AnchorProvider(
     connection,
     // dummy wallet — only used for reads
-    { publicKey: PublicKey.default, signTransaction: async (t) => t, signAllTransactions: async (t) => t } as unknown as AnchorWallet,
+    { publicKey: PublicKey.default, signTransaction: async (t) => t, signAllTransactions: async (t) => t } as unknown as Wallet,
     { commitment: 'confirmed' },
   );
   return new Program(idlJson as Idl, provider) as unknown as Program<PolybasketsEscrow>;
@@ -58,7 +59,7 @@ export function readonlyProgram(): Program<PolybasketsEscrow> {
 
 /** Build a signing Program from a wallet-adapter wallet. */
 export function escrowProgram(wallet: AnchorWallet, conn: Connection = connection): Program<PolybasketsEscrow> {
-  const provider = new AnchorProvider(conn, wallet, { commitment: 'confirmed' });
+  const provider = new AnchorProvider(conn, wallet as unknown as Wallet, { commitment: 'confirmed' });
   return new Program(idlJson as Idl, provider) as unknown as Program<PolybasketsEscrow>;
 }
 
@@ -119,17 +120,50 @@ export async function fetchPosition(idBytes: Uint8Array, owner: PublicKey): Prom
   }
 }
 
-/** Create the basket + vault on-chain if it does not exist yet. */
+/** Basket composition stored on-chain: Polymarket market + outcome + weight. */
+export interface OnChainBasketItemInput {
+  marketId: string;
+  outcome: 'YES' | 'NO';
+  weightBps: number;
+}
+
+/**
+ * Map frontend items to the on-chain shape and force the weights to sum to
+ * exactly 10000 bps (the program requires it). Any rounding remainder is applied
+ * to the largest-weight item.
+ */
+function toOnChainItems(
+  items: OnChainBasketItemInput[],
+): Array<{ marketId: string; outcome: number; weightBps: number }> {
+  const mapped = items.map((it) => ({
+    marketId: it.marketId,
+    outcome: it.outcome === 'YES' ? 1 : 0,
+    weightBps: Math.max(1, Math.round(it.weightBps)),
+  }));
+  const total = mapped.reduce((sum, it) => sum + it.weightBps, 0);
+  const diff = 10000 - total;
+  if (diff !== 0 && mapped.length > 0) {
+    let maxIdx = 0;
+    mapped.forEach((it, i) => {
+      if (it.weightBps > mapped[maxIdx].weightBps) maxIdx = i;
+    });
+    mapped[maxIdx].weightBps = Math.max(1, mapped[maxIdx].weightBps + diff);
+  }
+  return mapped;
+}
+
+/** Create the basket + vault on-chain (with its composition) if it doesn't exist. */
 export async function ensureBasket(
   wallet: AnchorWallet,
   idBytes: Uint8Array,
+  items: OnChainBasketItemInput[],
 ): Promise<void> {
   if (await basketExists(idBytes)) {
     return;
   }
   const program = escrowProgram(wallet);
   await program.methods
-    .createBasket(Array.from(idBytes))
+    .createBasket(Array.from(idBytes), toOnChainItems(items))
     .accounts({
       config: configPda(),
       basket: basketPda(idBytes),
