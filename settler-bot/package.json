@@ -1,0 +1,24 @@
+{
+  "name": "polybaskets-settler",
+  "version": "0.1.0",
+  "description": "Settler bot that monitors Polymarket and settles baskets on the PolyBaskets Solana escrow program",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "build": "tsc && cp -r src/idl dist/src/idl",
+    "start": "node dist/src/index.js",
+    "dev": "tsx src/index.ts",
+    "watch": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.95.4",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
