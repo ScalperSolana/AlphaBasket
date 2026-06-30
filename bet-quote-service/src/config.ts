@@ -11,91 +11,55 @@ const getRequiredEnv = (name: string): string => {
   if (!value) {
     throw new Error(`Missing environment variable: ${name}`);
   }
-
   return value;
 };
 
-const getRequiredHexEnv = (name: string): `0x${string}` => {
-  const value = getRequiredEnv(name);
-  if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
-    throw new Error(`Invalid ${name}: expected 32-byte hex ActorId`);
-  }
-
-  return value as `0x${string}`;
-};
-
-const getPositiveNumberEnv = (name: string, fallback: string): number => {
+const getNumberEnv = (name: string, fallback: string): number => {
   const value = Number(getOptionalEnv(name) ?? fallback);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`Invalid ${name}: expected a positive number`);
   }
-
   return value;
 };
 
-const getAllowedOrigins = (): string[] =>
-  (getOptionalEnv('FRONTEND_URLS') ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
+/** Base58-encoded Solana private key for the quote signer (the program's quote_signer). */
+const getQuoteSignerKeypairBase58 = (): string => {
+  const key = getOptionalEnv('BET_QUOTE_SIGNER_KEYPAIR');
+  const keyFile = getOptionalEnv('BET_QUOTE_SIGNER_KEYPAIR_FILE');
 
-const getCsvEnv = (name: string, fallback: string): string[] =>
-  (getOptionalEnv(name) ?? fallback)
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-const normalizeMnemonic = (value: string): string =>
-  value
-    .split(/[,\s]+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(' ');
-
-const getQuoteSignerSeed = (): string => {
-  const seed = getOptionalEnv('BET_QUOTE_SIGNER_SEED');
-  const seedFile = getOptionalEnv('BET_QUOTE_SIGNER_SEED_FILE');
-
-  if (seed && seedFile) {
-    throw new Error('Set exactly one of BET_QUOTE_SIGNER_SEED or BET_QUOTE_SIGNER_SEED_FILE');
+  if (key && keyFile) {
+    throw new Error('Set exactly one of BET_QUOTE_SIGNER_KEYPAIR or BET_QUOTE_SIGNER_KEYPAIR_FILE');
   }
-
-  if (seedFile) {
-    const fileValue = readFileSync(seedFile, 'utf8').trim();
+  if (keyFile) {
+    const fileValue = readFileSync(keyFile, 'utf8').trim();
     if (!fileValue) {
-      throw new Error(`BET_QUOTE_SIGNER_SEED_FILE is empty: ${seedFile}`);
+      throw new Error(`BET_QUOTE_SIGNER_KEYPAIR_FILE is empty: ${keyFile}`);
     }
-
-    return normalizeMnemonic(fileValue);
+    return fileValue;
   }
-
-  if (seed) {
-    return normalizeMnemonic(seed);
+  if (key) {
+    return key;
   }
-
-  throw new Error('Missing quote signer secret: set BET_QUOTE_SIGNER_SEED or BET_QUOTE_SIGNER_SEED_FILE');
+  throw new Error(
+    'Missing quote signer secret: set BET_QUOTE_SIGNER_KEYPAIR (base58 private key) or BET_QUOTE_SIGNER_KEYPAIR_FILE',
+  );
 };
 
 export const config = {
-  port: getPositiveNumberEnv('PORT', getOptionalEnv('BET_QUOTE_SERVICE_PORT') ?? '4360'),
-  varaRpcUrl: getRequiredEnv('VARA_RPC_URL'),
-  varaReconnectAttempts: getPositiveNumberEnv('VARA_RECONNECT_ATTEMPTS', '5'),
-  varaReconnectDelayMs: getPositiveNumberEnv('VARA_RECONNECT_DELAY_MS', '1000'),
-  varaReconnectMaxDelayMs: getPositiveNumberEnv('VARA_RECONNECT_MAX_DELAY_MS', '10000'),
-  basketMarketProgramId: getRequiredHexEnv('BASKET_MARKET_PROGRAM_ID'),
-  betLaneProgramId: getRequiredHexEnv('BET_LANE_PROGRAM_ID'),
-  quoteSignerSeed: getQuoteSignerSeed(),
-  quoteTtlMs: getPositiveNumberEnv('BET_QUOTE_TTL_MS', '30000'),
-  betCutoffMs: getPositiveNumberEnv('BASKET_MARKET_BET_CUTOFF_MS', '60000'),
-  marketEndToleranceMs: getPositiveNumberEnv('BASKET_MARKET_END_TOLERANCE_MS', '120000'),
+  port: getNumberEnv('BET_QUOTE_SERVICE_PORT', '4360'),
+  signerKeypairBase58: getQuoteSignerKeypairBase58(),
+  // Solana RPC used to read basket composition on-chain.
+  rpcUrl:
+    getOptionalEnv('QUOTE_RPC_URL') ??
+    getOptionalEnv('SOLANA_RPC_URL') ??
+    'https://api.devnet.solana.com',
   polymarketGammaBaseUrl:
     getOptionalEnv('POLYMARKET_GAMMA_BASE_URL') ?? 'https://gamma-api.polymarket.com',
-  allowedOrigins: getAllowedOrigins(),
-  bindingPrefix: getOptionalEnv('BET_QUOTE_BINDING_PREFIX') ?? 'BetLaneQuoteV1',
-  basketMarketBindingPrefix:
-    getOptionalEnv('BASKET_MARKET_QUOTE_BINDING_PREFIX') ?? 'BasketMarketVaraQuoteV1',
-  blockedMarketSlugPatterns: getCsvEnv(
-    'BASKET_MARKET_BLOCKED_SLUG_PATTERNS',
-    'btc-updown-5m,btc-updown-15m',
-  ),
+  // Signed-quote lifetime; the escrow rejects quotes past `expiry`.
+  quoteTtlMs: getNumberEnv('BET_QUOTE_TTL_MS', '120000'),
+  // CORS allowlist (comma-separated). Empty → allow all (dev).
+  allowedOrigins: (getOptionalEnv('FRONTEND_URLS') ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 };
