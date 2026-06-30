@@ -40,6 +40,10 @@ pub enum EscrowError {
     WrongTokenOwner,
     #[msg("Position does not belong to this basket")]
     PositionBasketMismatch,
+    #[msg("Basket items are missing, too many, or malformed")]
+    InvalidBasketItems,
+    #[msg("Basket item weights must sum to 10000 bps")]
+    InvalidBasketWeights,
     #[msg("Arithmetic overflow")]
     MathOverflow,
 }

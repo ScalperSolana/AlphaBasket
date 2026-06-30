@@ -43,9 +43,13 @@ pub mod polybaskets_escrow {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
-    /// Create a basket and its dedicated USDC vault.
-    pub fn create_basket(ctx: Context<CreateBasket>, basket_id: [u8; 32]) -> Result<()> {
-        instructions::create_basket::create_basket_handler(ctx, basket_id)
+    /// Create a basket and its dedicated USDC vault, storing its composition.
+    pub fn create_basket(
+        ctx: Context<CreateBasket>,
+        basket_id: [u8; 32],
+        items: Vec<BasketItem>,
+    ) -> Result<()> {
+        instructions::create_basket::create_basket_handler(ctx, basket_id, items)
     }
 
     /// Stake USDC into a basket at an Ed25519-signed entry index.

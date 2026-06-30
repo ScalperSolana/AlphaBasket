@@ -149,8 +149,12 @@ describe("polybaskets-escrow", () => {
   const newBasketId = () => Buffer.from(Keypair.generate().publicKey.toBytes());
 
   async function createBasket(basketId: Buffer, creator = payer) {
+    const items = [
+      { marketId: "100", outcome: 1, weightBps: 6000 },
+      { marketId: "200", outcome: 0, weightBps: 4000 },
+    ];
     await program.methods
-      .createBasket([...basketId])
+      .createBasket([...basketId], items)
       .accounts({
         config: configPda,
         basket: basketPda(basketId),

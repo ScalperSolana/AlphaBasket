@@ -18,6 +18,19 @@ pub enum BasketStatus {
     Settled,
 }
 
+/// Max markets per basket (caps the on-chain Basket account size).
+pub const MAX_BASKET_ITEMS: usize = 16;
+/// Max length of a stored Polymarket market identifier.
+pub const MAX_MARKET_ID_LEN: usize = 64;
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
+pub struct BasketItem {
+    #[max_len(MAX_MARKET_ID_LEN)]
+    pub market_id: String,
+    pub outcome: u8,
+    pub weight_bps: u16,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Basket {
@@ -29,6 +42,8 @@ pub struct Basket {
     pub settlement_proposed_at: i64,
     pub total_staked: u64,
     pub created_at: i64,
+    #[max_len(MAX_BASKET_ITEMS)]
+    pub items: Vec<BasketItem>,
     pub bump: u8,
     pub vault_bump: u8,
 }
