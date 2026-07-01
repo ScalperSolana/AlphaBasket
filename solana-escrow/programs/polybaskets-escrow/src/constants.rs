@@ -4,9 +4,9 @@ use anchor_lang::prelude::*;
 pub const MAX_BPS: u16 = 10_000;
 
 /// Settlement challenge window: the delay (in seconds) that must elapse between
-/// propose_settlement and finalize_settlement.
+/// propose_settlement and finalize_settlement. 12 minutes in production.
 #[constant]
-pub const CHALLENGE_WINDOW_SECS: i64 = 12;
+pub const CHALLENGE_WINDOW_SECS: i64 = 12 * 60;
 
 /// Canonical message length for a signed entry-index quote.
 pub const QUOTE_MSG_LEN: usize = 82;

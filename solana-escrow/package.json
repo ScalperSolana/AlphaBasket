@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "lint": "true"
+    "lint": "true",
+    "test": "NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
@@ -13,10 +14,13 @@
     "@types/bn.js": "^5.1.5",
     "@types/chai": "^4.3.11",
     "@types/mocha": "^10.0.6",
+    "anchor-bankrun": "^0.4.0",
     "chai": "^4.4.1",
     "mocha": "^10.3.0",
+    "solana-bankrun": "^0.4.0",
     "ts-mocha": "^10.0.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.22.4",
     "typescript": "^5.4.0"
   }
 }
