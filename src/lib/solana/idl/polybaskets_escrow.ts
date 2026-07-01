@@ -1382,10 +1382,10 @@ export type PolybasketsEscrow = {
       "name": "challengeWindowSecs",
       "docs": [
         "Settlement challenge window: the delay (in seconds) that must elapse between",
-        "propose_settlement and finalize_settlement."
+        "propose_settlement and finalize_settlement. 12 minutes in production."
       ],
       "type": "i64",
-      "value": "12"
+      "value": "720"
     }
   ]
 };

@@ -4,8 +4,15 @@ import {
   getFollows,
   getBasketById,
   deleteBasket,
-  getPositionsByOwner,
+  getBaskets,
 } from '@/lib/basket-storage.ts';
+import {
+  basketIdBytes,
+  basketPda,
+  fetchOwnerOnchainPositions,
+} from '@/lib/solana/escrowProgram.ts';
+import { PublicKey } from '@solana/web3.js';
+import { useQuery } from '@tanstack/react-query';
 import { fromUsdcUnits } from '@/lib/solana/usdc.ts';
 import { BasketCard } from '@/components/BasketCard';
 import { WalletButton } from '@/components/WalletButton';
@@ -32,43 +39,49 @@ export default function MyBasketsPage() {
   const [deletingBasketId, setDeletingBasketId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const { myBaskets, followedBaskets, positionBaskets } = useMemo(() => {
+  const { myBaskets, followedBaskets } = useMemo(() => {
     if (!address) {
-      return { myBaskets: [], followedBaskets: [], positionBaskets: [] as PositionBasket[] };
+      return { myBaskets: [] as Basket[], followedBaskets: [] as Basket[] };
     }
-
     const created = getBasketsByOwner(address).sort((a, b) => b.createdAt - a.createdAt);
-
     const followed = getFollows(address)
       .map((id) => getBasketById(id))
       .filter((b): b is Basket => b !== null);
+    return { myBaskets: created, followedBaskets: followed };
+  }, [address, refreshKey]);
 
-    // Group off-chain positions by basket.
-    const byBasket = new Map<string, { units: bigint; claimed: boolean; requested: boolean }>();
-    for (const p of getPositionsByOwner(address)) {
-      const prev = byBasket.get(p.basketId) ?? { units: 0n, claimed: true, requested: false };
-      byBasket.set(p.basketId, {
-        units: prev.units + BigInt(p.stakeUsdcUnits),
-        claimed: prev.claimed && p.claimed,
-        requested: prev.requested || Boolean(p.claimRequestedAt),
-      });
-    }
+  // Live on-chain positions (authoritative), mapped back to basket metadata by PDA.
+  const { data: positionBaskets = [] } = useQuery<PositionBasket[]>({
+    queryKey: ['onchain-positions', address, refreshKey],
+    enabled: !!address,
+    refetchInterval: 5000,
+    queryFn: async () => {
+      const owner = new PublicKey(address!);
+      const onchain = await fetchOwnerOnchainPositions(owner);
+      if (onchain.length === 0) return [];
 
-    const positions: PositionBasket[] = [];
-    byBasket.forEach((value, basketId) => {
-      const basket = getBasketById(basketId);
-      if (basket && value.units > 0n) {
+      // Map basket PDA -> known basket (localStorage holds the string id + markets).
+      const pdaToBasket = new Map<string, Basket>();
+      for (const b of getBaskets()) {
+        const idBytes = await basketIdBytes(b.id);
+        pdaToBasket.set(basketPda(idBytes).toBase58(), b);
+      }
+
+      const positions: PositionBasket[] = [];
+      for (const pos of onchain) {
+        if (pos.stakeUsdcUnits <= 0n) continue;
+        const basket = pdaToBasket.get(pos.basket.toBase58());
+        if (!basket) continue; // basket metadata not stored locally
         positions.push({
           basket,
-          stakeUsdcUnits: value.units,
-          claimed: value.claimed,
-          claimRequested: value.requested,
+          stakeUsdcUnits: pos.stakeUsdcUnits,
+          claimed: pos.claimed,
+          claimRequested: false,
         });
       }
-    });
-
-    return { myBaskets: created, followedBaskets: followed, positionBaskets: positions };
-  }, [address, refreshKey]);
+      return positions;
+    },
+  });
 
   const handleRefresh = () => setRefreshKey((prev) => prev + 1);
 

@@ -84,7 +84,7 @@ export function BasketCard({ basket, onDelete, isDeleting }: BasketCardProps) {
     },
     enabled: basketMarketIds.length > 0,
     staleTime: 3000, // Consider data fresh for 3 seconds
-    refetchInterval: 5000, // Refetch every 5 seconds for live feel
+    refetchInterval: 2000, // Refetch every 2 seconds for live PnL
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnMount: true,

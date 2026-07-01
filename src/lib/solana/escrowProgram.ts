@@ -120,6 +120,44 @@ export async function fetchPosition(idBytes: Uint8Array, owner: PublicKey): Prom
   }
 }
 
+/**
+ * UI-shaped view of the on-chain UserPosition (field names match the legacy
+ * off-chain Position so components can swap data source without other changes).
+ */
+export async function fetchOnchainPosition(
+  idBytes: Uint8Array,
+  owner: PublicKey,
+): Promise<{ stakeUsdcUnits: string; indexAtCreationBps: number; claimed: boolean } | null> {
+  const p = await fetchPosition(idBytes, owner);
+  if (!p) return null;
+  return {
+    stakeUsdcUnits: p.stakeUnits.toString(),
+    indexAtCreationBps: p.entryIndexBps,
+    claimed: p.claimed,
+  };
+}
+
+/**
+ * Enumerate all of a wallet's on-chain positions in one RPC (getProgramAccounts
+ * filtered on the Position.owner field, which sits right after the 8-byte
+ * account discriminator). Returns the basket PDA for each so callers can map
+ * back to basket metadata.
+ */
+export async function fetchOwnerOnchainPositions(owner: PublicKey): Promise<
+  Array<{ basket: PublicKey; stakeUsdcUnits: bigint; indexAtCreationBps: number; claimed: boolean }>
+> {
+  const program = readonlyProgram();
+  const all = await program.account.position.all([
+    { memcmp: { offset: 8, bytes: owner.toBase58() } },
+  ]);
+  return all.map((p) => ({
+    basket: p.account.basket as PublicKey,
+    stakeUsdcUnits: BigInt(p.account.stakeAmount.toString()),
+    indexAtCreationBps: Number(p.account.entryIndexBps),
+    claimed: p.account.claimed as boolean,
+  }));
+}
+
 /** Basket composition stored on-chain: Polymarket market + outcome + weight. */
 export interface OnChainBasketItemInput {
   marketId: string;

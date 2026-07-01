@@ -29,7 +29,8 @@ import { useWallet } from '@/contexts/WalletContext';
 import { useNetwork } from '@/contexts/NetworkContext';
 import { NETWORKS } from '@/lib/network.ts';
 import { fromUsdcUnits, usdcUnitsToNumber } from '@/lib/solana/usdc.ts';
-import { basketIdBytes, fetchBasket } from '@/lib/solana/escrowProgram.ts';
+import { basketIdBytes, fetchBasket, fetchOnchainPosition } from '@/lib/solana/escrowProgram.ts';
+import { PublicKey } from '@solana/web3.js';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -79,8 +80,8 @@ export default function BasketPage() {
     queryKey: ['market-details', basketMarketIds.sort().join(',')],
     queryFn: () => getMarketDetailsBatch(basketMarketIds),
     enabled: basketMarketIds.length > 0,
-    staleTime: 3000,
-    refetchInterval: 5000,
+    staleTime: 1000,
+    refetchInterval: 2000,
   });
 
   // Per-item live data, statuses, and changes vs the creation snapshot.
@@ -212,10 +213,16 @@ export default function BasketPage() {
     return ((displayedIndex - creationSnapshotIndex) / creationSnapshotIndex) * 100;
   }, [displayedIndex, creationSnapshotIndex]);
 
-  const position = useMemo(
-    () => (address && id ? getOwnerPositionForBasket(address, id) : null),
-    [address, id],
-  );
+  // Live on-chain UserPosition (authoritative), replacing the localStorage ledger.
+  const { data: position } = useQuery({
+    queryKey: ['onchain-position', id, address],
+    enabled: !!address && !!id,
+    refetchInterval: 2000,
+    queryFn: async () => {
+      const idBytes = await basketIdBytes(id!);
+      return fetchOnchainPosition(idBytes, new PublicKey(address!));
+    },
+  });
 
   const pnl = useMemo(() => {
     if (!position || settlementIndexBps === null) return null;

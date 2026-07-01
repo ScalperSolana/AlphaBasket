@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAnchorWallet } from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
 import { Coins, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,6 +22,7 @@ import {
   basketIdBytes,
   stakeWithQuote,
   claimPosition,
+  fetchOnchainPosition,
 } from '@/lib/solana/escrowProgram.ts';
 import { getSignedQuote, isQuoteApiConfigured } from '@/lib/solana/quoteApi.ts';
 
@@ -54,15 +56,22 @@ export function BetLanePanel({
 
   const quoteConfigured = isQuoteApiConfigured() || !!ENV.DEV_QUOTE_SIGNER_SECRET;
 
-  const position = useMemo<Position | null>(
-    () => (address && basketId ? getOwnerPositionForBasket(address, basketId) : null),
-    [address, basketId, bettingPhase, claiming],
-  );
+  // Live on-chain UserPosition (authoritative), replacing the localStorage ledger.
+  const { data: position } = useQuery({
+    queryKey: ['onchain-position', basketId, address],
+    enabled: !!address && !!basketId,
+    refetchInterval: 2000,
+    queryFn: async () => {
+      const idBytes = await basketIdBytes(basketId!);
+      return fetchOnchainPosition(idBytes, new PublicKey(address!));
+    },
+  });
 
   const stakeUnits = position ? BigInt(position.stakeUsdcUnits) : 0n;
   const hasPosition = stakeUnits > 0n;
   const claimed = position?.claimed ?? false;
-  const claimRequested = Boolean(position?.claimRequestedAt);
+  // On-chain claims are direct — no persistent "requested" state; `claiming` covers the in-flight tx.
+  const claimRequested = false;
 
   const expectedPayoutUnits = useMemo(() => {
     if (!position || !hasPosition || settlementIndexBps === null) {
