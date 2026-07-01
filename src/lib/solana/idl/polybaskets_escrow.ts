@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/polybaskets_escrow.json`.
  */
 export type PolybasketsEscrow = {
-  "address": "D8q5GyXqCfGwpUpoYGrXG87kHGtmXE1yM2nmLRQ5C8s5",
+  "address": "hJYvvev2BT4tnPzDqK9veY7sT2XyAHctMGGBYVnkG8Q",
   "metadata": {
     "name": "polybasketsEscrow",
     "version": "0.1.0",
@@ -1106,9 +1106,6 @@ export type PolybasketsEscrow = {
           },
           {
             "name": "items",
-            "docs": [
-              "Basket composition (Polymarket markets + weights), set at creation."
-            ],
             "type": {
               "vec": {
                 "defined": {
@@ -1151,33 +1148,19 @@ export type PolybasketsEscrow = {
     },
     {
       "name": "basketItem",
-      "docs": [
-        "One constituent of a basket: a Polymarket market + the outcome bet on + weight.",
-        "Stored on-chain so the settler/quote services read composition directly from",
-        "the program (no off-chain registry needed)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "marketId",
-            "docs": [
-              "Polymarket market id (the value the off-chain services fetch by)."
-            ],
             "type": "string"
           },
           {
             "name": "outcome",
-            "docs": [
-              "Outcome bet on: 0 = NO, 1 = YES."
-            ],
             "type": "u8"
           },
           {
             "name": "weightBps",
-            "docs": [
-              "Weight in basis points (1..=10000)."
-            ],
             "type": "u16"
           }
         ]
