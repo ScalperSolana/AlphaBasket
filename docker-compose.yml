@@ -25,12 +25,12 @@ x-indexer-env: &indexer-env
   CONTEST_GRACE_PERIOD_MS: ${CONTEST_GRACE_PERIOD_MS:-1800000}
 
 x-shared-bot-secret-env: &shared-bot-secret-env
-  SETTLER_SEED: ${SETTLER_SEED:-}
-  SETTLER_SEED_FILE: ${SETTLER_SEED_FILE:-}
+  SETTLER_KEYPAIR: ${SETTLER_KEYPAIR:-}
+  SETTLER_KEYPAIR_FILE: ${SETTLER_KEYPAIR_FILE:-}
 
 x-bet-quote-secret-env: &bet-quote-secret-env
-  BET_QUOTE_SIGNER_SEED: ${BET_QUOTE_SIGNER_SEED:-}
-  BET_QUOTE_SIGNER_SEED_FILE: ${BET_QUOTE_SIGNER_SEED_FILE:-}
+  BET_QUOTE_SIGNER_KEYPAIR: ${BET_QUOTE_SIGNER_KEYPAIR:-}
+  BET_QUOTE_SIGNER_KEYPAIR_FILE: ${BET_QUOTE_SIGNER_KEYPAIR_FILE:-}
 
 services:
   postgres:
@@ -141,13 +141,10 @@ services:
     working_dir: /app/settler-bot
     environment:
       <<: *shared-bot-secret-env
-      VARA_RPC_URL: ${VARA_RPC_URL}
-      BASKET_MARKET_PROGRAM_ID: ${BASKET_MARKET_PROGRAM_ID}
+      SETTLER_RPC_URL: ${SETTLER_RPC_URL:-https://api.devnet.solana.com}
       SETTLER_BOT_POLL_INTERVAL_MS: ${SETTLER_BOT_POLL_INTERVAL_MS:-30000}
+      SETTLER_BOT_PROPOSE_ENABLED: ${SETTLER_BOT_PROPOSE_ENABLED:-true}
       SETTLER_BOT_FINALIZE_ENABLED: ${SETTLER_BOT_FINALIZE_ENABLED:-true}
-      VARA_RECONNECT_ATTEMPTS: ${VARA_RECONNECT_ATTEMPTS:-5}
-      VARA_RECONNECT_DELAY_MS: ${VARA_RECONNECT_DELAY_MS:-1000}
-      VARA_RECONNECT_MAX_DELAY_MS: ${VARA_RECONNECT_MAX_DELAY_MS:-10000}
       POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
     command: ["npm", "start"]
 
@@ -160,17 +157,11 @@ services:
     working_dir: /app/bet-quote-service
     environment:
       <<: *bet-quote-secret-env
-      PORT: ${BET_QUOTE_SERVICE_PORT:-4360}
+      BET_QUOTE_SERVICE_PORT: ${BET_QUOTE_SERVICE_PORT:-4360}
       FRONTEND_URLS: ${FRONTEND_URLS}
-      VARA_RPC_URL: ${VARA_RPC_URL}
-      BASKET_MARKET_PROGRAM_ID: ${BASKET_MARKET_PROGRAM_ID}
-      BET_LANE_PROGRAM_ID: ${BET_LANE_PROGRAM_ID}
+      QUOTE_RPC_URL: ${QUOTE_RPC_URL:-https://api.devnet.solana.com}
       POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
-      BET_QUOTE_TTL_MS: ${BET_QUOTE_TTL_MS:-30000}
-      BET_QUOTE_BINDING_PREFIX: ${BET_QUOTE_BINDING_PREFIX:-BetLaneQuoteV1}
-      VARA_RECONNECT_ATTEMPTS: ${VARA_RECONNECT_ATTEMPTS:-5}
-      VARA_RECONNECT_DELAY_MS: ${VARA_RECONNECT_DELAY_MS:-1000}
-      VARA_RECONNECT_MAX_DELAY_MS: ${VARA_RECONNECT_MAX_DELAY_MS:-10000}
+      BET_QUOTE_TTL_MS: ${BET_QUOTE_TTL_MS:-120000}
     command: ["npm", "start"]
     ports:
       - "127.0.0.1:${BET_QUOTE_SERVICE_PORT:-4360}:4360"
@@ -180,8 +171,39 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:4360/healthz').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:4360/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ai-server:
+    build:
+      context: .
+      dockerfile: ai-server/Dockerfile
+    container_name: polybaskets-ai-server
+    restart: unless-stopped
+    depends_on:
+      bet-quote-service:
+        condition: service_healthy
+    environment:
+      AI_SERVER_PORT: 4370
+      AI_SOLANA_RPC_URL: ${AI_SOLANA_RPC_URL:-https://api.devnet.solana.com}
+      AI_SOLANA_CLUSTER: ${AI_SOLANA_CLUSTER:-devnet}
+      AI_USDC_MINT: ${AI_USDC_MINT:-Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr}
+      AI_QUOTE_API_URL: http://bet-quote-service:4360
+      AI_OPERATOR_KEYPAIR: ${AI_OPERATOR_KEYPAIR:-}
+      AI_WRITE_API_KEY: ${AI_WRITE_API_KEY:-}
+      AI_ALLOWED_ORIGINS: ${AI_ALLOWED_ORIGINS:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      BACKBOARD_API_KEY: ${BACKBOARD_API_KEY:-}
+      THESIS_RESEARCHER_ASSISTANT_ID: ${THESIS_RESEARCHER_ASSISTANT_ID:-}
+      POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
+    ports:
+      - "127.0.0.1:${AI_SERVER_PORT:-4370}:4370"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4370/api/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
