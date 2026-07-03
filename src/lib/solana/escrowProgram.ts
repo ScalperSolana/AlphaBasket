@@ -19,6 +19,19 @@ import { connection, USDC_MINT } from '@/lib/solana/connection';
 import idlJson from '@/lib/solana/idl/polybaskets_escrow.json';
 import type { PolybasketsEscrow } from '@/lib/solana/idl/polybaskets_escrow';
 import type { SignedQuote } from '@/lib/solana/quoteApi';
+import {
+  MAX_BASKET_DEPOSIT_USDC_UNITS,
+  MAX_USER_DEPOSIT_USDC_UNITS,
+} from '@/lib/solana/escrowEconomics';
+
+export {
+  DEPOSIT_FEE_BPS,
+  WITHDRAWAL_FEE_BPS,
+  MAX_BASKET_DEPOSIT_USDC_UNITS,
+  MAX_USER_DEPOSIT_USDC_UNITS,
+  feeUnitsCeil,
+  netDepositUnits,
+} from '@/lib/solana/escrowEconomics';
 
 export const ESCROW_PROGRAM_ID = new PublicKey((idlJson as { address: string }).address);
 
@@ -81,6 +94,9 @@ export async function fetchBasket(idBytes: Uint8Array): Promise<{
   /** Unix time of the proposal (0 if none). */
   settlementProposedAt: number;
   totalStaked: bigint;
+  totalDeposited: bigint;
+  totalPositions: number;
+  claimedPositions: number;
 } | null> {
   const program = readonlyProgram();
   try {
@@ -93,6 +109,9 @@ export async function fetchBasket(idBytes: Uint8Array): Promise<{
       proposedIndexBps: Number(acct.proposedIndexBps),
       settlementProposedAt: Number(acct.settlementProposedAt),
       totalStaked: BigInt(acct.totalStaked.toString()),
+      totalDeposited: BigInt(acct.totalDeposited.toString()),
+      totalPositions: Number(acct.totalPositions),
+      claimedPositions: Number(acct.claimedPositions),
     };
   } catch {
     return null;
@@ -226,6 +245,9 @@ export async function stakeWithQuote(
 ): Promise<string> {
   const program = escrowProgram(wallet);
   const owner = wallet.publicKey;
+  if (amountUnits > MAX_USER_DEPOSIT_USDC_UNITS) {
+    throw new Error('A wallet may deposit at most 500 USDC into one basket.');
+  }
   const stakerUsdc = getAssociatedTokenAddressSync(USDC_MINT, owner);
 
   const edIx = Ed25519Program.createInstructionWithPublicKey({
@@ -236,7 +258,7 @@ export async function stakeWithQuote(
 
   return program.methods
     .stake(new BN(amountUnits.toString()), quote.entryIndexBps, new BN(quote.nonce.toString()), new BN(quote.expiry.toString()))
-    .accounts({
+    .accountsPartial({
       config: configPda(),
       basket: basketPda(idBytes),
       vault: vaultPda(idBytes),
@@ -259,7 +281,7 @@ export async function claimPosition(wallet: AnchorWallet, idBytes: Uint8Array): 
   const claimerUsdc = getAssociatedTokenAddressSync(USDC_MINT, owner);
   return program.methods
     .claim()
-    .accounts({
+    .accountsPartial({
       config: configPda(),
       basket: basketPda(idBytes),
       vault: vaultPda(idBytes),

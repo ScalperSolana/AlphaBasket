@@ -1,12 +1,13 @@
 import { Basket, BasketDraft, BasketItem, Position, Snapshot, NetworkType } from '@/types/basket.ts';
+import { netDepositUnits } from '@/lib/solana/escrowEconomics';
 
 const BASKETS_KEY = 'polybaskets_baskets';
 const FOLLOWS_KEY = 'polybaskets_follows';
 const DRAFT_KEY = 'polybaskets_draft';
 const POSITIONS_KEY = 'polybaskets_positions';
 
-// Off-chain ledger backed by localStorage. Stakes execute on Solana (USDC
-// transfer to the treasury); baskets and positions are tracked here. This layer
+// Off-chain metadata cache backed by localStorage. Stakes execute on Solana
+// into basket-specific USDC vaults; baskets and positions are tracked here. This layer
 // is intentionally function-scoped so a backend indexer can replace it later
 // without touching callers.
 //
@@ -205,7 +206,10 @@ export function getPositions(): Position[] {
 
 export function addPosition(position: Position): void {
   const positions = getPositions();
-  positions.push(position);
+  // Both transaction call sites provide the gross amount sent by the wallet.
+  // Store the post-fee principal so local PnL mirrors the on-chain Position.
+  const netStake = netDepositUnits(BigInt(position.stakeUsdcUnits));
+  positions.push({ ...position, stakeUsdcUnits: netStake.toString() });
   localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions));
 }
 

@@ -185,6 +185,10 @@ async function stakeBuilder(
 ): Promise<{ idBytes: Buffer; quote: SignedQuote; builder: any; ownerUsdc: PublicKey }> {
   const idBytes = basketIdBytes(basketId);
   if (!(await connection.getAccountInfo(basketPda(idBytes)))) throw new Error('Basket does not exist on-chain');
+  const amountUnits = usdcUnits(amountUsdc);
+  if (amountUnits > 500_000_000n) {
+    throw new Error('A wallet may deposit at most 500 USDC into one basket');
+  }
   const quote = await signedQuote(idBytes, owner);
   const ownerUsdc = getAssociatedTokenAddressSync(usdcMint, owner);
   const ed25519 = Ed25519Program.createInstructionWithPublicKey({
@@ -195,12 +199,12 @@ async function stakeBuilder(
   const createAta = createAssociatedTokenAccountIdempotentInstruction(owner, ownerUsdc, owner, usdcMint);
   const builder = (program.methods as any)
     .stake(
-      new anchor.BN(usdcUnits(amountUsdc).toString()),
+      new anchor.BN(amountUnits.toString()),
       quote.entryIndexBps,
       new anchor.BN(String(quote.nonce)),
       new anchor.BN(String(quote.expiry)),
     )
-    .accounts({
+    .accountsPartial({
       config: configPda(),
       basket: basketPda(idBytes),
       vault: vaultPda(idBytes),
@@ -248,7 +252,7 @@ async function claimBuilder(program: Program, basketId: string, owner: PublicKey
   const createAta = createAssociatedTokenAccountIdempotentInstruction(owner, ownerUsdc, owner, usdcMint);
   return (program.methods as any)
     .claim()
-    .accounts({
+    .accountsPartial({
       config: configPda(),
       basket: basketPda(idBytes),
       vault: vaultPda(idBytes),
@@ -265,6 +269,26 @@ export async function claimWithOperator(basketId: string): Promise<{ signature: 
   const { keypair, program } = operatorContext();
   const signature = await (await claimBuilder(program, basketId, keypair.publicKey)).rpc();
   return { signature, owner: keypair.publicKey.toBase58() };
+}
+
+export async function sweepSurplusWithOperator(basketId: string): Promise<{
+  signature: string;
+  admin: string;
+}> {
+  const { keypair, program } = operatorContext();
+  const idBytes = basketIdBytes(basketId);
+  const signature = await (program.methods as any)
+    .sweepSurplus()
+    .accountsPartial({
+      config: configPda(),
+      basket: basketPda(idBytes),
+      vault: vaultPda(idBytes),
+      usdcMint,
+      admin: keypair.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .rpc();
+  return { signature, admin: keypair.publicKey.toBase58() };
 }
 
 export async function prepareClaimTransaction(
@@ -298,6 +322,9 @@ function formatBasketAccount(publicKey: PublicKey, account: any): Record<string,
     proposedIndexBps: Number(account.proposedIndexBps),
     settlementProposedAt: Number(account.settlementProposedAt),
     totalStaked: account.totalStaked.toString(),
+    totalDeposited: account.totalDeposited.toString(),
+    totalPositions: Number(account.totalPositions),
+    claimedPositions: Number(account.claimedPositions),
     createdAt: Number(account.createdAt),
     items: account.items.map((item: any) => ({
       marketId: item.marketId,
@@ -335,6 +362,7 @@ export async function getWalletPositions(ownerAddress: string): Promise<Record<s
     basket: (entry.account.basket as PublicKey).toBase58(),
     owner: (entry.account.owner as PublicKey).toBase58(),
     stakeAmount: entry.account.stakeAmount.toString(),
+    depositedAmount: entry.account.depositedAmount.toString(),
     entryIndexBps: Number(entry.account.entryIndexBps),
     claimed: Boolean(entry.account.claimed),
   }));

@@ -14,6 +14,7 @@ import {
   prepareClaimTransaction,
   prepareStakeTransaction,
   stakeWithOperator,
+  sweepSurplusWithOperator,
 } from './solana.js';
 
 const app = express();
@@ -151,6 +152,11 @@ app.post('/api/baskets/prepare-claim', asyncRoute(async (req, res) => {
 app.post('/api/baskets/claim', requireWriteKey, asyncRoute(async (req, res) => {
   const request = z.object({ basketId: z.string().trim().min(1) }).parse(req.body);
   res.json(await claimWithOperator(request.basketId));
+}));
+
+app.post('/api/baskets/sweep-surplus', requireWriteKey, asyncRoute(async (req, res) => {
+  const request = z.object({ basketId: z.string().trim().min(1) }).parse(req.body);
+  res.json(await sweepSurplusWithOperator(request.basketId));
 }));
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

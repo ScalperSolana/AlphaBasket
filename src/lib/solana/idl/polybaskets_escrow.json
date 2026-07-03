@@ -1,5 +1,5 @@
 {
-  "address": "hJYvvev2BT4tnPzDqK9veY7sT2XyAHctMGGBYVnkG8Q",
+  "address": "5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm",
   "metadata": {
     "name": "polybaskets_escrow",
     "version": "0.1.0",
@@ -43,6 +43,7 @@
         },
         {
           "name": "basket",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -122,6 +123,13 @@
           "writable": true
         },
         {
+          "name": "treasury_usdc",
+          "writable": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
           "name": "usdc_mint"
         },
         {
@@ -129,7 +137,8 @@
           "signer": true
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -222,7 +231,8 @@
           "signer": true
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -412,7 +422,8 @@
           "signer": true
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -458,9 +469,42 @@
           }
         },
         {
+          "name": "treasury_usdc",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  45,
+                  117,
+                  115,
+                  100,
+                  99
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
           "name": "admin",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -474,10 +518,6 @@
         },
         {
           "name": "quote_signer",
-          "type": "pubkey"
-        },
-        {
-          "name": "usdc_mint",
           "type": "pubkey"
         }
       ]
@@ -779,6 +819,13 @@
           "writable": true
         },
         {
+          "name": "treasury_usdc",
+          "writable": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
           "name": "usdc_mint"
         },
         {
@@ -791,7 +838,8 @@
           "address": "Sysvar1nstructions1111111111111111111111111"
         },
         {
-          "name": "token_program"
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -816,6 +864,112 @@
           "type": "i64"
         }
       ]
+    },
+    {
+      "name": "sweep_surplus",
+      "docs": [
+        "After every recorded position has claimed, transfer the exact remaining",
+        "basket-vault surplus to the configured USDC treasury account."
+      ],
+      "discriminator": [
+        144,
+        67,
+        197,
+        177,
+        218,
+        200,
+        50,
+        24
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_usdc",
+          "writable": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -871,6 +1025,19 @@
         85,
         8,
         7
+      ]
+    },
+    {
+      "name": "BasketSurplusSwept",
+      "discriminator": [
+        193,
+        64,
+        173,
+        135,
+        200,
+        164,
+        31,
+        168
       ]
     },
     {
@@ -977,76 +1144,101 @@
     },
     {
       "code": 6007,
+      "name": "DepositTooSmall",
+      "msg": "Deposit is too small after fees"
+    },
+    {
+      "code": 6008,
+      "name": "BasketDepositLimitExceeded",
+      "msg": "This deposit would exceed the 10,000 USDC basket cap"
+    },
+    {
+      "code": 6009,
+      "name": "UserDepositLimitExceeded",
+      "msg": "This deposit would exceed the 500 USDC per-user basket cap"
+    },
+    {
+      "code": 6010,
+      "name": "UnsupportedMintDecimals",
+      "msg": "The configured settlement mint must use six decimals"
+    },
+    {
+      "code": 6011,
       "name": "InvalidIndex",
       "msg": "Index must be within 1..=10000"
     },
     {
-      "code": 6008,
+      "code": 6012,
       "name": "QuoteExpired",
       "msg": "Signed quote has expired"
     },
     {
-      "code": 6009,
+      "code": 6013,
       "name": "QuoteNonceReused",
       "msg": "Quote nonce was already used"
     },
     {
-      "code": 6010,
+      "code": 6014,
       "name": "MissingQuoteSignature",
       "msg": "Missing Ed25519 quote signature instruction"
     },
     {
-      "code": 6011,
+      "code": 6015,
       "name": "MalformedQuoteSignature",
       "msg": "Malformed Ed25519 quote signature instruction"
     },
     {
-      "code": 6012,
+      "code": 6016,
       "name": "UnauthorizedQuoteSigner",
       "msg": "Quote was not signed by the configured quote signer"
     },
     {
-      "code": 6013,
+      "code": 6017,
       "name": "QuoteMismatch",
       "msg": "Signed quote does not match the staking parameters"
     },
     {
-      "code": 6014,
+      "code": 6018,
       "name": "AlreadyClaimed",
       "msg": "Position already claimed"
     },
     {
-      "code": 6015,
+      "code": 6019,
+      "name": "OutstandingClaims",
+      "msg": "All positions must be claimed before the basket surplus can be swept"
+    },
+    {
+      "code": 6020,
       "name": "InsufficientVaultLiquidity",
       "msg": "Vault has insufficient USDC to cover this payout"
     },
     {
-      "code": 6016,
+      "code": 6021,
       "name": "WrongMint",
       "msg": "Token account has the wrong mint"
     },
     {
-      "code": 6017,
+      "code": 6022,
       "name": "WrongTokenOwner",
       "msg": "Token account has the wrong owner"
     },
     {
-      "code": 6018,
+      "code": 6023,
       "name": "PositionBasketMismatch",
       "msg": "Position does not belong to this basket"
     },
     {
-      "code": 6019,
+      "code": 6024,
       "name": "InvalidBasketItems",
       "msg": "Basket items are missing, too many, or malformed"
     },
     {
-      "code": 6020,
+      "code": 6025,
       "name": "InvalidBasketWeights",
       "msg": "Basket item weights must sum to 10000 bps"
     },
     {
-      "code": 6021,
+      "code": 6026,
       "name": "MathOverflow",
       "msg": "Arithmetic overflow"
     }
@@ -1092,7 +1284,25 @@
           },
           {
             "name": "total_staked",
+            "docs": [
+              "Net stake credited after deposit fees; used by payout accounting."
+            ],
             "type": "u64"
+          },
+          {
+            "name": "total_deposited",
+            "docs": [
+              "Gross deposits before fees; used to enforce the 10,000 USDC basket cap."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_positions",
+            "type": "u32"
+          },
+          {
+            "name": "claimed_positions",
+            "type": "u32"
           },
           {
             "name": "created_at",
@@ -1178,6 +1388,31 @@
       }
     },
     {
+      "name": "BasketSurplusSwept",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Claimed",
       "type": {
         "kind": "struct",
@@ -1196,7 +1431,15 @@
             "type": "pubkey"
           },
           {
-            "name": "payout",
+            "name": "gross_payout",
+            "type": "u64"
+          },
+          {
+            "name": "fee_amount",
+            "type": "u64"
+          },
+          {
+            "name": "net_payout",
             "type": "u64"
           }
         ]
@@ -1221,6 +1464,10 @@
           },
           {
             "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_usdc",
             "type": "pubkey"
           },
           {
@@ -1249,6 +1496,16 @@
           },
           {
             "name": "stake_amount",
+            "docs": [
+              "Net principal credited after deposit fees."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "deposited_amount",
+            "docs": [
+              "Cumulative gross deposits; used to enforce the 500 USDC user cap."
+            ],
             "type": "u64"
           },
           {
@@ -1339,7 +1596,15 @@
             "type": "pubkey"
           },
           {
-            "name": "amount",
+            "name": "gross_amount",
+            "type": "u64"
+          },
+          {
+            "name": "fee_amount",
+            "type": "u64"
+          },
+          {
+            "name": "net_amount",
             "type": "u64"
           },
           {

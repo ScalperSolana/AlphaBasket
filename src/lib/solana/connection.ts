@@ -40,9 +40,8 @@ export const USDC_MINT = (() => {
 })();
 
 /**
- * Protocol treasury wallet that receives stakes. May be empty in local dev;
- * callers must check `isTreasuryConfigured()` before building a transfer so we
- * never send funds to a zero/garbage address (fail closed — safe-solana-builder).
+ * Protocol treasury wallet. The escrow program stores its `treasury-usdc`
+ * token-account PDA in Config; this env value is legacy UI metadata.
  */
 export const TREASURY_ADDRESS = tryPublicKey(ENV.TREASURY_ADDRESS);
 

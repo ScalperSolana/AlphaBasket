@@ -13,6 +13,7 @@ import {
   prepareClaimTransaction,
   prepareStakeTransaction,
   stakeWithOperator,
+  sweepSurplusWithOperator,
 } from './solana.js';
 
 const server = new McpServer({ name: 'polybaskets-slicefund', version: '0.1.0' });
@@ -102,6 +103,15 @@ server.registerTool(
     inputSchema: { basketId: z.string().min(1) },
   },
   async ({ basketId }) => text(await claimWithOperator(basketId)),
+);
+
+server.registerTool(
+  'sweep_basket_surplus',
+  {
+    description: 'Admin-only: after every position has claimed, transfer the remaining basket-vault surplus to the admin USDC treasury.',
+    inputSchema: { basketId: z.string().min(1) },
+  },
+  async ({ basketId }) => text(await sweepSurplusWithOperator(basketId)),
 );
 
 server.registerTool(

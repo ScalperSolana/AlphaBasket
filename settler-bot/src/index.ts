@@ -71,7 +71,7 @@ async function processBasket(basket: OnChainBasket): Promise<void> {
     } else if (basket.status === 'Proposed' && config.shouldFinalize) {
       await tryFinalize(basket);
     }
-    // 'Settled' → nothing to do.
+    // 'Settled' → terminal state; nothing to do.
   } catch (error) {
     console.error(`${prefix} error:`, error instanceof Error ? error.message : error);
   }
@@ -87,7 +87,7 @@ async function poll(): Promise<void> {
     return;
   }
 
-  const actionable = baskets.filter((b) => b.status !== 'Settled');
+  const actionable = baskets.filter((b) => b.status === 'Active' || b.status === 'Proposed');
   console.log(`${ts} polling ${actionable.length}/${baskets.length} unsettled baskets…`);
   for (const basket of actionable) {
     await processBasket(basket);

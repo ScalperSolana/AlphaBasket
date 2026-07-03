@@ -10,7 +10,8 @@ PolyBaskets Solana escrow. It does not import or modify either frontend.
   never sent directly on-chain.
 - Maps markets to `{ marketId, outcome, weightBps }` and normalizes weights to
   exactly 10,000 basis points.
-- Calls the existing Anchor `create_basket`, `stake`, and `claim` instructions.
+- Calls the Anchor `create_basket`, `stake`, `claim`, and admin-only
+  `sweep_surplus` instructions.
 - Exposes the same capabilities over HTTP and MCP.
 - Reads live baskets, settlement state, and wallet positions from Solana RPC.
 
@@ -43,6 +44,15 @@ Operator staking also requires the quote signer service at
 write routes require `x-api-key: $AI_WRITE_API_KEY`. MCP calls are local and do
 not use the HTTP key.
 
+The escrow charges 2% of each gross deposit and 2% of each gross claim payout
+to the USDC treasury stored in `Config`. Gross deposits are capped at 500 USDC per
+wallet per basket and 10,000 USDC across all users per basket. House liquidity
+added through `fund_basket` does not consume the user-deposit cap.
+
+The treasury is created and stored by the program's main `initialize`
+instruction. Agent calls resolve it automatically; no treasury address is
+accepted from HTTP or MCP callers.
+
 ## HTTP routes
 
 - `POST /api/thesis/map`
@@ -56,6 +66,8 @@ not use the HTTP key.
 - `POST /api/baskets/prepare-stake`
 - `POST /api/baskets/prepare-claim`
 - `POST /api/baskets/claim`
+- `POST /api/baskets/sweep-surplus` (admin operator only; all positions must be
+  claimed; basket remains settled)
 - `GET /api/baskets`
 - `GET /api/baskets/:basketId`
 - `GET /api/positions/:owner`
@@ -84,7 +96,7 @@ The old SliceFund `/api/mock/polymarket/execute-basket` and
 Available tools include `research_thesis`, `create_basket_onchain`,
 `research_and_create_basket`, `stake_operator_wallet`, `prepare_user_stake`,
 `prepare_user_claim`, `claim_operator_position`, `get_basket`, `list_baskets`,
-and `get_wallet_positions`.
+`get_wallet_positions`, and admin-only `sweep_basket_surplus`.
 
 User stake and claim tools return unsigned serialized transactions bound to the
 specified wallet. The external wallet must sign them; the service never signs
