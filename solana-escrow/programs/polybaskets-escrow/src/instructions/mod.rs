@@ -5,6 +5,7 @@ pub mod fund_basket;
 pub mod initialize;
 pub mod settlement;
 pub mod stake;
+pub mod sweep_surplus;
 
 pub use admin::*;
 pub use claim::*;
@@ -13,3 +14,4 @@ pub use fund_basket::*;
 pub use initialize::*;
 pub use settlement::*;
 pub use stake::*;
+pub use sweep_surplus::*;

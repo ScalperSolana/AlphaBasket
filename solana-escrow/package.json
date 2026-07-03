@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "lint": "true",
-    "test": "NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'"
+    "test": "NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'",
+    "sweep-surplus": "tsx tools/sweep-surplus.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

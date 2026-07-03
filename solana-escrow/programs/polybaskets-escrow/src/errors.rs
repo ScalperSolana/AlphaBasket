@@ -16,6 +16,14 @@ pub enum EscrowError {
     ChallengeWindowActive,
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
+    #[msg("Deposit is too small after fees")]
+    DepositTooSmall,
+    #[msg("This deposit would exceed the 10,000 USDC basket cap")]
+    BasketDepositLimitExceeded,
+    #[msg("This deposit would exceed the 500 USDC per-user basket cap")]
+    UserDepositLimitExceeded,
+    #[msg("The configured settlement mint must use six decimals")]
+    UnsupportedMintDecimals,
     #[msg("Index must be within 1..=10000")]
     InvalidIndex,
     #[msg("Signed quote has expired")]
@@ -32,6 +40,8 @@ pub enum EscrowError {
     QuoteMismatch,
     #[msg("Position already claimed")]
     AlreadyClaimed,
+    #[msg("All positions must be claimed before the basket surplus can be swept")]
+    OutstandingClaims,
     #[msg("Vault has insufficient USDC to cover this payout")]
     InsufficientVaultLiquidity,
     #[msg("Token account has the wrong mint")]

@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{
-    transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
-};
+use anchor_spl::token::Token;
+use anchor_spl::token_interface::{transfer_checked, Mint, TokenAccount, TransferChecked};
 
 use crate::errors::EscrowError;
 use crate::events::VaultFunded;
@@ -30,7 +29,7 @@ pub struct FundBasket<'info> {
     pub usdc_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub funder: Signer<'info>,
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
 }
 
 /// Allows anyone to fund the basket vault.

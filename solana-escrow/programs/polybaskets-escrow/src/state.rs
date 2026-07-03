@@ -7,6 +7,7 @@ pub struct Config {
     pub oracle_authority: Pubkey,
     pub quote_signer: Pubkey,
     pub usdc_mint: Pubkey,
+    pub treasury_usdc: Pubkey,
     pub paused: bool,
     pub bump: u8,
 }
@@ -40,7 +41,12 @@ pub struct Basket {
     pub settlement_index_bps: u16,
     pub proposed_index_bps: u16,
     pub settlement_proposed_at: i64,
+    /// Net stake credited after deposit fees; used by payout accounting.
     pub total_staked: u64,
+    /// Gross deposits before fees; used to enforce the 10,000 USDC basket cap.
+    pub total_deposited: u64,
+    pub total_positions: u32,
+    pub claimed_positions: u32,
     pub created_at: i64,
     #[max_len(MAX_BASKET_ITEMS)]
     pub items: Vec<BasketItem>,
@@ -53,7 +59,10 @@ pub struct Basket {
 pub struct Position {
     pub owner: Pubkey,
     pub basket: Pubkey,
+    /// Net principal credited after deposit fees.
     pub stake_amount: u64,
+    /// Cumulative gross deposits; used to enforce the 500 USDC user cap.
+    pub deposited_amount: u64,
     pub entry_index_bps: u16,
     pub last_quote_nonce: u64,
     pub claimed: bool,

@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
+use anchor_spl::token::Token;
+use anchor_spl::token_interface::{Mint, TokenAccount};
 
 use crate::constants::MAX_BPS;
 use crate::errors::EscrowError;
@@ -33,7 +34,7 @@ pub struct CreateBasket<'info> {
     pub usdc_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub creator: Signer<'info>,
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
@@ -63,7 +64,10 @@ pub fn create_basket_handler(
             .checked_add(item.weight_bps as u32)
             .ok_or(EscrowError::MathOverflow)?;
     }
-    require!(total_weight == MAX_BPS as u32, EscrowError::InvalidBasketWeights);
+    require!(
+        total_weight == MAX_BPS as u32,
+        EscrowError::InvalidBasketWeights
+    );
 
     let basket = &mut ctx.accounts.basket;
     basket.basket_id = basket_id;
@@ -73,6 +77,9 @@ pub fn create_basket_handler(
     basket.proposed_index_bps = 0;
     basket.settlement_proposed_at = 0;
     basket.total_staked = 0;
+    basket.total_deposited = 0;
+    basket.total_positions = 0;
+    basket.claimed_positions = 0;
     basket.created_at = Clock::get()?.unix_timestamp;
     basket.items = items;
     basket.bump = ctx.bumps.basket;

@@ -47,6 +47,7 @@ describe("polybaskets-escrow (bankrun)", () => {
 
   let mint: PublicKey;
   let userUsdc: PublicKey;
+  let treasuryUsdc: PublicKey;
   let configPda: PublicKey;
 
   const basketPda = (id: Buffer) =>
@@ -118,7 +119,7 @@ describe("polybaskets-escrow (bankrun)", () => {
     sendTx([createMintToInstruction(mint, ata, payer.publicKey, amount)]);
 
   async function tokenBalance(ata: PublicKey): Promise<bigint> {
-    const acct = await banksClient.getAccount(ata as unknown as Uint8Array); // impl calls .toBytes()
+    const acct = await banksClient.getAccount(ata);
     if (!acct) return 0n;
     return AccountLayout.decode(Buffer.from(acct.data)).amount;
   }
@@ -164,7 +165,7 @@ describe("polybaskets-escrow (bankrun)", () => {
     const edIx = ed25519Ix(opts.quoteSignerKp ?? quoteSigner, msg);
     const stakeIx = await program.methods
       .stake(new BN(amount), entryBps, new BN(nonce.toString()), new BN(FAR_EXPIRY.toString()))
-      .accounts({
+      .accountsPartial({
         config: configPda,
         basket: basketPda(basketId),
         vault: vaultPda(basketId),
@@ -185,7 +186,7 @@ describe("polybaskets-escrow (bankrun)", () => {
   async function createBasket(basketId: Buffer) {
     await program.methods
       .createBasket([...basketId], ITEMS)
-      .accounts({
+      .accountsStrict({
         config: configPda,
         basket: basketPda(basketId),
         vault: vaultPda(basketId),
@@ -230,13 +231,13 @@ describe("polybaskets-escrow (bankrun)", () => {
     claimer: user.publicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
   });
-  const claimIx = (basketId: Buffer) => program.methods.claim().accounts(claimAccounts(basketId)).instruction();
-  const claim = (basketId: Buffer) => program.methods.claim().accounts(claimAccounts(basketId)).signers([user]).rpc();
+  const claimIx = (basketId: Buffer) => program.methods.claim().accountsPartial(claimAccounts(basketId)).instruction();
+  const claim = (basketId: Buffer) => program.methods.claim().accountsPartial(claimAccounts(basketId)).signers([user]).rpc();
 
   const fund = (basketId: Buffer, funderUsdc: PublicKey, amount: number) =>
     program.methods
       .fundBasket(new BN(amount))
-      .accounts({
+      .accountsStrict({
         config: configPda,
         basket: basketPda(basketId),
         vault: vaultPda(basketId),
@@ -256,35 +257,59 @@ describe("polybaskets-escrow (bankrun)", () => {
     payer = (provider.wallet as anchor.Wallet).payer;
 
     [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+    [treasuryUsdc] = PublicKey.findProgramAddressSync([Buffer.from("treasury-usdc")], program.programId);
 
     await fundSol(user.publicKey, 5);
     mint = await createMint();
     userUsdc = await createAta(user.publicKey);
-    await mintToAta(userUsdc, 1_000 * ONE_USDC);
+    await mintToAta(userUsdc, 5_000 * ONE_USDC);
 
     await program.methods
-      .initialize(oracleAuthority.publicKey, quoteSigner.publicKey, mint)
-      .accounts({ config: configPda, admin: payer.publicKey, systemProgram: SystemProgram.programId })
+      .initialize(oracleAuthority.publicKey, quoteSigner.publicKey)
+      .accountsStrict({
+        config: configPda,
+        treasuryUsdc,
+        usdcMint: mint,
+        admin: payer.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
       .rpc();
+
+    const config = await program.account.config.fetch(configPda);
+    assert.isTrue((config.treasuryUsdc as PublicKey).equals(treasuryUsdc));
+    assert.isNotNull(await banksClient.getAccount(treasuryUsdc));
   });
 
   it("full happy path: stake -> settle -> fund -> claim with profit", async () => {
     const basketId = newBasketId();
     await createBasket(basketId);
 
+    const treasuryBeforeDeposit = await tokenBalance(treasuryUsdc);
     await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 100 * ONE_USDC, entryBps: 6000, nonce: 1n });
-    assert.equal(Number(await tokenBalance(vaultPda(basketId))), 100 * ONE_USDC, "vault holds the stake");
+    assert.equal(Number(await tokenBalance(vaultPda(basketId))), 98 * ONE_USDC, "vault holds net stake after 2% fee");
+    assert.equal(
+      Number((await tokenBalance(treasuryUsdc)) - treasuryBeforeDeposit),
+      2 * ONE_USDC,
+      "2% deposit fee reaches treasury",
+    );
 
     await settle(basketId, 9000); // payout = 100 * 9000/6000 = 150
 
-    const houseUsdc = await createAta(payer.publicKey);
-    await mintToAta(houseUsdc, 50 * ONE_USDC);
-    await fund(basketId, houseUsdc, 50 * ONE_USDC);
+    await mintToAta(treasuryUsdc, 50 * ONE_USDC);
+    await fund(basketId, treasuryUsdc, 50 * ONE_USDC);
 
     const before = Number(await tokenBalance(userUsdc));
+    const treasuryBeforeClaim = await tokenBalance(treasuryUsdc);
     await claim(basketId);
     const after = Number(await tokenBalance(userUsdc));
-    assert.equal(after - before, 150 * ONE_USDC, "payout = stake * settlement/entry");
+    // Gross payout = 98 * 9000/6000 = 147; withdrawal fee = 2.94.
+    assert.equal(after - before, 144_060_000, "claim receives gross payout less 2% withdrawal fee");
+    assert.equal(
+      Number((await tokenBalance(treasuryUsdc)) - treasuryBeforeClaim),
+      2_940_000,
+      "2% withdrawal fee reaches treasury",
+    );
   });
 
   it("rejects a forged quote (wrong signer)", async () => {
@@ -306,6 +331,28 @@ describe("polybaskets-escrow (bankrun)", () => {
       quoteOverrideMsg: wrongMsg,
     });
     await expectRevert(ixs, [user], /QuoteMismatch/);
+  });
+
+  it("rejects Ed25519 quotes that source verification bytes by instruction index", async () => {
+    const basketId = newBasketId();
+    await createBasket(basketId);
+    const ixs = await stakeIxs({
+      basketId,
+      staker: user,
+      stakerUsdc: userUsdc,
+      amount: 10 * ONE_USDC,
+      entryBps: 5000,
+      nonce: 12n,
+    });
+
+    // expectRevert prepends a compute-budget instruction, so the Ed25519
+    // instruction is index 1. Explicitly referencing it still passes native
+    // verification, but the escrow must require u16::MAX/current-instruction
+    // sentinels to prevent cross-instruction quote substitution.
+    for (const offset of [4, 8, 14]) {
+      ixs[0].data.writeUInt16LE(1, offset);
+    }
+    await expectRevert(ixs, [user], /MalformedQuoteSignature/);
   });
 
   it("rejects claim before settlement", async () => {
@@ -358,11 +405,132 @@ describe("polybaskets-escrow (bankrun)", () => {
 
     await expectRevert([await claimIx(basketId)], [user], /InsufficientVaultLiquidity/);
 
-    const houseUsdc = getAssociatedTokenAddressSync(mint, payer.publicKey);
-    await mintToAta(houseUsdc, 100 * ONE_USDC);
-    await fund(basketId, houseUsdc, 100 * ONE_USDC);
+    await mintToAta(treasuryUsdc, 100 * ONE_USDC);
+    await fund(basketId, treasuryUsdc, 100 * ONE_USDC);
     await claim(basketId);
 
     await expectRevert([await claimIx(basketId)], [user], /AlreadyClaimed/);
+  });
+
+  it("enforces the 500 USDC cumulative per-user cap", async () => {
+    const basketId = newBasketId();
+    await createBasket(basketId);
+
+    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 500 * ONE_USDC, entryBps: 5000, nonce: 50n });
+    const overCap = await stakeIxs({
+      basketId,
+      staker: user,
+      stakerUsdc: userUsdc,
+      amount: ONE_USDC,
+      entryBps: 5000,
+      nonce: 51n,
+    });
+    await expectRevert(overCap, [user], /UserDepositLimitExceeded/);
+
+    const position = await (program.account as any).position.fetch(positionPda(basketId, user.publicKey));
+    assert.equal(position.depositedAmount.toString(), String(500 * ONE_USDC));
+    assert.equal(position.stakeAmount.toString(), String(490 * ONE_USDC));
+  });
+
+  it("enforces the 10,000 USDC aggregate user-deposit cap per basket", async () => {
+    const basketId = newBasketId();
+    await createBasket(basketId);
+
+    for (let i = 0; i < 20; i += 1) {
+      const staker = Keypair.generate();
+      await fundSol(staker.publicKey, 1);
+      const stakerUsdc = await createAta(staker.publicKey);
+      await mintToAta(stakerUsdc, 501 * ONE_USDC);
+      await stake({
+        basketId,
+        staker,
+        stakerUsdc,
+        amount: 500 * ONE_USDC,
+        entryBps: 5000,
+        nonce: 1n,
+      });
+    }
+
+    const overflowUser = Keypair.generate();
+    await fundSol(overflowUser.publicKey, 1);
+    const overflowUsdc = await createAta(overflowUser.publicKey);
+    await mintToAta(overflowUsdc, ONE_USDC);
+    const overCap = await stakeIxs({
+      basketId,
+      staker: overflowUser,
+      stakerUsdc: overflowUsdc,
+      amount: ONE_USDC,
+      entryBps: 5000,
+      nonce: 1n,
+    });
+    await expectRevert(overCap, [overflowUser], /BasketDepositLimitExceeded/);
+
+    const basket = await (program.account as any).basket.fetch(basketPda(basketId));
+    assert.equal(basket.totalDeposited.toString(), String(10_000 * ONE_USDC));
+    assert.equal(basket.totalStaked.toString(), String(9_800 * ONE_USDC));
+    assert.equal(basket.totalPositions, 20);
+  });
+
+  it("lets only the admin sweep surplus without changing settled basket state", async () => {
+    const basketId = newBasketId();
+    await createBasket(basketId);
+    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 100 * ONE_USDC, entryBps: 10_000, nonce: 60n });
+    await settle(basketId, 5_000); // gross payout 49, leaving 49 in the vault
+
+    const sweepIx = (admin: PublicKey) => program.methods
+      .sweepSurplus()
+      .accountsPartial({
+        config: configPda,
+        basket: basketPda(basketId),
+        vault: vaultPda(basketId),
+        usdcMint: mint,
+        admin,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+
+    await expectRevert([await sweepIx(payer.publicKey)], [], /OutstandingClaims/);
+    await claim(basketId);
+
+    const notAdmin = Keypair.generate();
+    await expectRevert([await sweepIx(notAdmin.publicKey)], [notAdmin], /has_one|ConstraintHasOne|2001/i);
+
+    const basketBeforeSweep = await (program.account as any).basket.fetch(basketPda(basketId));
+    const before = await tokenBalance(treasuryUsdc);
+    const sweepTx = new Transaction().add(await sweepIx(payer.publicKey));
+    sweepTx.feePayer = payer.publicKey;
+    sweepTx.recentBlockhash = (await banksClient.getLatestBlockhash())![0];
+    sweepTx.sign(payer);
+    const sweepResult = await banksClient.tryProcessTransaction(sweepTx);
+    assert.isNull(
+      sweepResult.result,
+      `sweep failed: ${sweepResult.result}\n${(sweepResult.meta?.logMessages ?? []).join("\n")}`,
+    );
+    const after = await tokenBalance(treasuryUsdc);
+    assert.equal(Number(after - before), 49 * ONE_USDC, "entire post-claim surplus reaches treasury");
+    assert.equal(Number(await tokenBalance(vaultPda(basketId))), 0);
+    const basket = await (program.account as any).basket.fetch(basketPda(basketId));
+    assert.isDefined(basket.status.settled);
+    assert.equal(basket.settlementIndexBps, basketBeforeSweep.settlementIndexBps);
+    assert.equal(basket.proposedIndexBps, basketBeforeSweep.proposedIndexBps);
+    assert.equal(basket.settlementProposedAt.toString(), basketBeforeSweep.settlementProposedAt.toString());
+    assert.equal(basket.totalDeposited.toString(), basketBeforeSweep.totalDeposited.toString());
+    assert.equal(basket.totalStaked.toString(), basketBeforeSweep.totalStaked.toString());
+    assert.equal(basket.totalPositions, basketBeforeSweep.totalPositions);
+    assert.equal(basket.claimedPositions, basketBeforeSweep.claimedPositions);
+
+    const newcomer = Keypair.generate();
+    await fundSol(newcomer.publicKey, 1);
+    const newcomerUsdc = await createAta(newcomer.publicKey);
+    await mintToAta(newcomerUsdc, 10 * ONE_USDC);
+    const newcomerDeposit = await stakeIxs({
+      basketId,
+      staker: newcomer,
+      stakerUsdc: newcomerUsdc,
+      amount: 10 * ONE_USDC,
+      entryBps: 5_000,
+      nonce: 1n,
+    });
+    await expectRevert(newcomerDeposit, [newcomer], /BasketNotActive/);
   });
 });

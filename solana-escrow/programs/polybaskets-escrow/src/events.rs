@@ -10,7 +10,9 @@ pub struct BasketCreated {
 pub struct Staked {
     pub basket_id: [u8; 32],
     pub owner: Pubkey,
-    pub amount: u64,
+    pub gross_amount: u64,
+    pub fee_amount: u64,
+    pub net_amount: u64,
     pub entry_index_bps: u16,
 }
 
@@ -38,5 +40,14 @@ pub struct Settled {
 pub struct Claimed {
     pub basket_id: [u8; 32],
     pub owner: Pubkey,
-    pub payout: u64,
+    pub gross_payout: u64,
+    pub fee_amount: u64,
+    pub net_payout: u64,
+}
+
+#[event]
+pub struct BasketSurplusSwept {
+    pub basket_id: [u8; 32],
+    pub treasury: Pubkey,
+    pub amount: u64,
 }

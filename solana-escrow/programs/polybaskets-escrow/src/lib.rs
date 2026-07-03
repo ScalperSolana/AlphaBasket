@@ -5,6 +5,7 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod instructions;
+pub mod math;
 pub mod state;
 
 pub use constants::*;
@@ -24,9 +25,8 @@ pub mod polybaskets_escrow {
         ctx: Context<Initialize>,
         oracle_authority: Pubkey,
         quote_signer: Pubkey,
-        usdc_mint: Pubkey,
     ) -> Result<()> {
-        instructions::initialize::initialize_handler(ctx, oracle_authority, quote_signer, usdc_mint)
+        instructions::initialize::initialize_handler(ctx, oracle_authority, quote_signer)
     }
 
     /// Rotate the oracle authority and/or quote signer. Admin only.
@@ -84,5 +84,11 @@ pub mod polybaskets_escrow {
     /// Claim a settled position. Payout = stake * settlement / entry.
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         instructions::claim::claim_handler(ctx)
+    }
+
+    /// After every recorded position has claimed, transfer the exact remaining
+    /// basket-vault surplus to the configured USDC treasury account.
+    pub fn sweep_surplus(ctx: Context<SweepSurplus>) -> Result<()> {
+        instructions::sweep_surplus::sweep_surplus_handler(ctx)
     }
 }
