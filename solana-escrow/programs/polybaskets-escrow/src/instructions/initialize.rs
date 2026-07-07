@@ -1,10 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::Token;
-use anchor_spl::token_interface::{Mint, TokenAccount};
 
-use crate::constants::USDC_DECIMALS;
+use crate::constants::{ACCOUNTING_DECIMALS, MAX_BPS, ZERO_PUBKEY};
 use crate::errors::EscrowError;
-use crate::state::Config;
+use crate::events::ConfigInitialized;
+use crate::state::{Config, InitializeArgs};
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -16,40 +15,51 @@ pub struct Initialize<'info> {
         space = 8 + Config::INIT_SPACE,
     )]
     pub config: Account<'info, Config>,
-    #[account(
-        init,
-        payer = admin,
-        seeds = [b"treasury-usdc"],
-        bump,
-        token::mint = usdc_mint,
-        token::authority = admin,
-        token::token_program = token_program,
-    )]
-    pub treasury_usdc: InterfaceAccount<'info, TokenAccount>,
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub admin: Signer<'info>,
-    pub token_program: Program<'info, Token>,
+    #[account(
+        constraint = program.programdata_address()? == Some(program_data.key())
+            @ EscrowError::Unauthorized,
+    )]
+    pub program: Program<'info, crate::program::PolybasketsEscrow>,
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(admin.key())
+            @ EscrowError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
     pub system_program: Program<'info, System>,
 }
 
-pub fn initialize_handler(
-    ctx: Context<Initialize>,
-    oracle_authority: Pubkey,
-    quote_signer: Pubkey,
-) -> Result<()> {
+pub fn initialize_handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     require!(
-        ctx.accounts.usdc_mint.decimals == USDC_DECIMALS,
-        EscrowError::UnsupportedMintDecimals
+        args.composer_signer != ZERO_PUBKEY
+            && args.backend_signer != ZERO_PUBKEY
+            && args.protocol_treasury != ZERO_PUBKEY
+            && args.settlement_mint != ZERO_PUBKEY,
+        EscrowError::ZeroAuthority
+    );
+    require!(
+        args.max_slippage_bps <= MAX_BPS,
+        EscrowError::InvalidBasisPoints
     );
 
     let config = &mut ctx.accounts.config;
     config.admin = ctx.accounts.admin.key();
-    config.oracle_authority = oracle_authority;
-    config.quote_signer = quote_signer;
-    config.usdc_mint = ctx.accounts.usdc_mint.key();
-    config.treasury_usdc = ctx.accounts.treasury_usdc.key();
+    config.pending_admin = None;
+    config.composer_signer = args.composer_signer;
+    config.backend_signer = args.backend_signer;
+    config.protocol_treasury = args.protocol_treasury;
+    config.settlement_mint = args.settlement_mint;
+    config.max_slippage_bps = args.max_slippage_bps;
+    config.accounting_decimals = ACCOUNTING_DECIMALS;
     config.paused = false;
     config.bump = ctx.bumps.config;
+
+    emit!(ConfigInitialized {
+        admin: config.admin,
+        composer_signer: config.composer_signer,
+        backend_signer: config.backend_signer,
+        protocol_treasury: config.protocol_treasury,
+    });
     Ok(())
 }

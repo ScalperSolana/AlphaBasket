@@ -1,53 +1,123 @@
 use anchor_lang::prelude::*;
 
+use crate::state::WithdrawalKind;
+
+#[event]
+pub struct ConfigInitialized {
+    pub admin: Pubkey,
+    pub composer_signer: Pubkey,
+    pub backend_signer: Pubkey,
+    pub protocol_treasury: Pubkey,
+}
+
+#[event]
+pub struct AuthoritiesUpdated {
+    pub admin: Pubkey,
+    pub composer_signer: Pubkey,
+    pub backend_signer: Pubkey,
+    pub protocol_treasury: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferProposed {
+    pub current_admin: Pubkey,
+    pub pending_admin: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferAccepted {
+    pub previous_admin: Pubkey,
+    pub new_admin: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferCancelled {
+    pub admin: Pubkey,
+    pub cancelled_admin: Pubkey,
+}
+
+#[event]
+pub struct PauseUpdated {
+    pub paused: bool,
+}
+
 #[event]
 pub struct BasketCreated {
+    pub basket: Pubkey,
     pub basket_id: [u8; 32],
+    pub composer: Pubkey,
     pub creator: Pubkey,
+    pub composition_hash: [u8; 32],
+    pub performance_fee_bps: u16,
 }
 
 #[event]
-pub struct Staked {
-    pub basket_id: [u8; 32],
-    pub owner: Pubkey,
-    pub gross_amount: u64,
-    pub fee_amount: u64,
-    pub net_amount: u64,
-    pub entry_index_bps: u16,
+pub struct DepositSettled {
+    pub intent_hash: [u8; 32],
+    pub intent_nonce: u64,
+    pub receipt: Pubkey,
+    pub basket: Pubkey,
+    pub user: Pubkey,
+    pub net_invested_value: u64,
+    pub shares_credited: u64,
+    pub protocol_fee: u64,
 }
 
 #[event]
-pub struct VaultFunded {
-    pub basket_id: [u8; 32],
-    pub amount: u64,
+pub struct WithdrawalSettled {
+    pub intent_hash: [u8; 32],
+    pub intent_nonce: u64,
+    pub receipt: Pubkey,
+    pub basket: Pubkey,
+    pub user: Pubkey,
+    pub destination: Pubkey,
+    pub shares_decremented: u64,
+    pub user_value_out: u64,
+    pub protocol_fee: u64,
+    pub creator_fee: u64,
+    pub withdrawn_cost_basis: u64,
+    pub realized_profit: u64,
+    pub early_exit_value: u64,
+    pub mature_exit_value: u64,
+    pub kind: WithdrawalKind,
 }
 
 #[event]
-pub struct SettlementProposed {
-    pub basket_id: [u8; 32],
-    pub settlement_index_bps: u16,
-    pub proposed_at: i64,
-    pub finalize_after: i64,
+pub struct ManagementFeeAccrued {
+    pub basket: Pubkey,
+    pub periods: u64,
+    pub shares_minted: u64,
+    pub protocol_fee_shares: u64,
+    pub total_shares_outstanding: u64,
+    pub accrued_through: i64,
 }
 
 #[event]
-pub struct Settled {
-    pub basket_id: [u8; 32],
-    pub settlement_index_bps: u16,
+pub struct ProtocolFeeSharesWithdrawn {
+    pub receipt: Pubkey,
+    pub basket: Pubkey,
+    pub destination: Pubkey,
+    pub shares_redeemed: u64,
+    pub gross_value: u64,
 }
 
 #[event]
-pub struct Claimed {
-    pub basket_id: [u8; 32],
-    pub owner: Pubkey,
-    pub gross_payout: u64,
-    pub fee_amount: u64,
-    pub net_payout: u64,
+pub struct BasketStatusUpdated {
+    pub basket: Pubkey,
+    pub status: crate::state::BasketStatus,
 }
 
 #[event]
-pub struct BasketSurplusSwept {
-    pub basket_id: [u8; 32],
-    pub treasury: Pubkey,
-    pub amount: u64,
+pub struct BasketReconstituted {
+    pub basket: Pubkey,
+    pub composition_hash: [u8; 32],
+    pub composition_version: u32,
+}
+
+#[event]
+pub struct FinalSettlementRecorded {
+    pub basket: Pubkey,
+    pub final_report_hash: [u8; 32],
+    pub final_nav_value: u64,
+    pub final_share_snapshot: u64,
 }
