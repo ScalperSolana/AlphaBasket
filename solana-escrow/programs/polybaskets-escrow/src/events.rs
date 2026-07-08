@@ -42,6 +42,11 @@ pub struct PauseUpdated {
 }
 
 #[event]
+pub struct LimitsUpdated {
+    pub max_slippage_bps: u16,
+}
+
+#[event]
 pub struct BasketCreated {
     pub basket: Pubkey,
     pub basket_id: [u8; 32],
@@ -58,6 +63,8 @@ pub struct DepositSettled {
     pub receipt: Pubkey,
     pub basket: Pubkey,
     pub user: Pubkey,
+    pub execution_batch_hash: [u8; 32],
+    pub executed_at: i64,
     pub net_invested_value: u64,
     pub shares_credited: u64,
     pub protocol_fee: u64,
@@ -71,6 +78,8 @@ pub struct WithdrawalSettled {
     pub basket: Pubkey,
     pub user: Pubkey,
     pub destination: Pubkey,
+    pub execution_batch_hash: [u8; 32],
+    pub executed_at: i64,
     pub shares_decremented: u64,
     pub user_value_out: u64,
     pub protocol_fee: u64,
@@ -86,6 +95,7 @@ pub struct WithdrawalSettled {
 pub struct ManagementFeeAccrued {
     pub basket: Pubkey,
     pub periods: u64,
+    pub elapsed_seconds: i64,
     pub shares_minted: u64,
     pub protocol_fee_shares: u64,
     pub total_shares_outstanding: u64,
@@ -97,6 +107,8 @@ pub struct ProtocolFeeSharesWithdrawn {
     pub receipt: Pubkey,
     pub basket: Pubkey,
     pub destination: Pubkey,
+    pub execution_batch_hash: [u8; 32],
+    pub executed_at: i64,
     pub shares_redeemed: u64,
     pub gross_value: u64,
 }

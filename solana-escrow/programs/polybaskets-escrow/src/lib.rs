@@ -1,4 +1,4 @@
-//! PolyBaskets escrow program.
+//! AlphaBasket v2 internal-share accounting program.
 use anchor_lang::prelude::*;
 
 pub mod constants;
@@ -20,75 +20,108 @@ declare_id!("5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm");
 pub mod polybaskets_escrow {
     use super::*;
 
-    /// One-time global config. `admin` is the upgrade/governance key.
-    pub fn initialize(
-        ctx: Context<Initialize>,
-        oracle_authority: Pubkey,
-        quote_signer: Pubkey,
-    ) -> Result<()> {
-        instructions::initialize::initialize_handler(ctx, oracle_authority, quote_signer)
+    /// Initializes the singleton configuration under the program upgrade authority.
+    pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+        instructions::initialize::initialize_handler(ctx, args)
     }
 
-    /// Rotate the oracle authority and/or quote signer. Admin only.
+    /// Rotates operational signer and treasury authorities.
     pub fn set_authorities(
         ctx: Context<AdminOnly>,
-        new_oracle_authority: Option<Pubkey>,
-        new_quote_signer: Option<Pubkey>,
+        new_composer_signer: Option<Pubkey>,
+        new_backend_signer: Option<Pubkey>,
+        new_protocol_treasury: Option<Pubkey>,
     ) -> Result<()> {
-        instructions::admin::set_authorities_handler(ctx, new_oracle_authority, new_quote_signer)
+        instructions::admin::set_authorities_handler(
+            ctx,
+            new_composer_signer,
+            new_backend_signer,
+            new_protocol_treasury,
+        )
     }
 
-    /// Emergency pause switch (blocks stake + claim). Admin only.
+    /// Starts the two-step administrator transfer.
+    pub fn propose_admin(ctx: Context<AdminOnly>, new_admin: Pubkey) -> Result<()> {
+        instructions::admin::propose_admin_handler(ctx, new_admin)
+    }
+
+    /// Accepts administrator authority as the proposed key.
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        instructions::admin::accept_admin_handler(ctx)
+    }
+
+    /// Cancels a pending administrator transfer.
+    pub fn cancel_admin_transfer(ctx: Context<AdminOnly>) -> Result<()> {
+        instructions::admin::cancel_admin_transfer_handler(ctx)
+    }
+
+    /// Updates the global user slippage bound.
+    pub fn set_limits(ctx: Context<AdminOnly>, max_slippage_bps: u16) -> Result<()> {
+        instructions::admin::set_limits_handler(ctx, max_slippage_bps)
+    }
+
+    /// Pauses or resumes user and execution completion flows.
     pub fn set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
-    /// Create a basket and its dedicated USDC vault, storing its composition.
-    pub fn create_basket(
-        ctx: Context<CreateBasket>,
-        basket_id: [u8; 32],
-        items: Vec<BasketItem>,
+    /// Only the configured Composer Service key can create a basket.
+    pub fn create_basket(ctx: Context<CreateBasket>, args: CreateBasketArgs) -> Result<()> {
+        instructions::create_basket::create_basket_handler(ctx, args)
+    }
+
+    /// Completes a user-signed deposit after external Polymarket execution.
+    pub fn complete_deposit(
+        ctx: Context<CompleteDeposit>,
+        args: CompleteDepositArgs,
     ) -> Result<()> {
-        instructions::create_basket::create_basket_handler(ctx, basket_id, items)
+        instructions::settlement::complete_deposit_handler(ctx, args)
     }
 
-    /// Stake USDC into a basket at an Ed25519-signed entry index.
-    pub fn stake(
-        ctx: Context<Stake>,
-        amount: u64,
-        entry_index_bps: u16,
-        nonce: u64,
-        expiry: i64,
+    /// Permissionless crank; dilution is proportional to exact elapsed seconds.
+    pub fn accrue_management_fee(ctx: Context<AccrueManagementFee>) -> Result<()> {
+        instructions::settlement::accrue_management_fee_handler(ctx)
+    }
+
+    /// Completes both an active early exit and a final redemption.
+    pub fn complete_withdrawal(
+        ctx: Context<CompleteWithdrawal>,
+        args: CompleteWithdrawalArgs,
     ) -> Result<()> {
-        instructions::stake::stake_handler(ctx, amount, entry_index_bps, nonce, expiry)
+        instructions::settlement::complete_withdrawal_handler(ctx, args)
     }
 
-    /// House liquidity: anyone may fund a basket vault to cover net winnings.
-    pub fn fund_basket(ctx: Context<FundBasket>, amount: u64) -> Result<()> {
-        instructions::fund_basket::fund_basket_handler(ctx, amount)
-    }
-
-    /// Propose the settlement index for a basket, opening the challenge window.
-    pub fn propose_settlement(
-        ctx: Context<ProposeSettlement>,
-        settlement_index_bps: u16,
+    /// Redeems accrued protocol dilution shares after external execution.
+    pub fn complete_protocol_fee_withdrawal(
+        ctx: Context<CompleteProtocolFeeWithdrawal>,
+        args: CompleteProtocolFeeWithdrawalArgs,
     ) -> Result<()> {
-        instructions::settlement::propose_settlement_handler(ctx, settlement_index_bps)
+        instructions::settlement::complete_protocol_fee_withdrawal_handler(ctx, args)
     }
 
-    /// Finalize a proposed settlement once the challenge window has elapsed.
-    pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
-        instructions::settlement::finalize_settlement_handler(ctx)
+    /// Moves an eligible perpetual basket into reconstitution.
+    pub fn begin_reconstitution(ctx: Context<BackendBasketAction>) -> Result<()> {
+        instructions::settlement::begin_reconstitution_handler(ctx)
     }
 
-    /// Claim a settled position. Payout = stake * settlement / entry.
-    pub fn claim(ctx: Context<Claim>) -> Result<()> {
-        instructions::claim::claim_handler(ctx)
+    /// Applies a new Composer-signed canonical composition.
+    pub fn complete_reconstitution(
+        ctx: Context<CompleteReconstitution>,
+        args: ReconstitutionArgs,
+    ) -> Result<()> {
+        instructions::settlement::complete_reconstitution_handler(ctx, args)
     }
 
-    /// After every recorded position has claimed, transfer the exact remaining
-    /// basket-vault surplus to the configured USDC treasury account.
-    pub fn sweep_surplus(ctx: Context<SweepSurplus>) -> Result<()> {
-        instructions::sweep_surplus::sweep_surplus_handler(ctx)
+    /// Stops deposits and starts resolution for a non-perpetual basket.
+    pub fn begin_resolution(ctx: Context<BackendBasketAction>) -> Result<()> {
+        instructions::settlement::begin_resolution_handler(ctx)
+    }
+
+    /// Records the final NAV and share snapshot for deterministic redemptions.
+    pub fn record_final_settlement(
+        ctx: Context<BackendBasketAction>,
+        args: FinalSettlementArgs,
+    ) -> Result<()> {
+        instructions::settlement::record_final_settlement_handler(ctx, args)
     }
 }

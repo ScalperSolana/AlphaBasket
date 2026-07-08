@@ -58,8 +58,8 @@ pub enum EscrowError {
     UserDepositLimitExceeded,
     #[msg("Insufficient shares")]
     InsufficientShares,
-    #[msg("Position has reached the maximum number of deposit lots")]
-    TooManyDepositLots,
+    #[msg("The initial $1 share price has already been consumed")]
+    SharePriceAlreadyInitialized,
     #[msg("Completion uses a stale composition version")]
     CompositionVersionMismatch,
     #[msg("Protocol fee does not match basket rules")]
@@ -84,6 +84,10 @@ pub enum EscrowError {
     CreatorFeeMismatch,
     #[msg("Management-fee catch-up exceeds the supported safety bound")]
     ManagementFeeCatchUpTooLarge,
+    #[msg("Execution batch uses an unsupported encoding version")]
+    InvalidExecutionVersion,
+    #[msg("Execution timestamp must be a valid past or current Unix timestamp")]
+    InvalidExecutionTimestamp,
     #[msg("Requested protocol fee shares exceed the accrued balance")]
     InsufficientProtocolFeeShares,
     #[msg("Arithmetic overflow or underflow")]

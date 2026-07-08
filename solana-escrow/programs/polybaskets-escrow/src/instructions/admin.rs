@@ -4,7 +4,7 @@ use crate::constants::{MAX_BPS, ZERO_PUBKEY};
 use crate::errors::EscrowError;
 use crate::events::{
     AdminTransferAccepted, AdminTransferCancelled, AdminTransferProposed, AuthoritiesUpdated,
-    PauseUpdated,
+    LimitsUpdated, PauseUpdated,
 };
 use crate::state::Config;
 
@@ -109,6 +109,7 @@ pub fn set_limits_handler(ctx: Context<AdminOnly>, max_slippage_bps: u16) -> Res
     require!(max_slippage_bps <= MAX_BPS, EscrowError::InvalidBasisPoints);
     let config = &mut ctx.accounts.config;
     config.max_slippage_bps = max_slippage_bps;
+    emit!(LimitsUpdated { max_slippage_bps });
     Ok(())
 }
 

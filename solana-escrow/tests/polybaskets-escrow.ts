@@ -1,536 +1,1124 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program, BN } from "@coral-xyz/anchor";
-import { startAnchor, Clock, BanksClient, ProgramTestContext } from "solana-bankrun";
+import { BN, BorshAccountsCoder, Program } from "@coral-xyz/anchor";
 import { BankrunProvider } from "anchor-bankrun";
+import { assert } from "chai";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
+  BanksClient,
+  Clock,
+  ProgramTestContext,
+  startAnchor,
+} from "solana-bankrun";
+import {
+  ComputeBudgetProgram,
+  Ed25519Program,
   Keypair,
   PublicKey,
-  SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
-  Ed25519Program,
+  SystemProgram,
   Transaction,
   TransactionInstruction,
-  ComputeBudgetProgram,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  MINT_SIZE,
-  AccountLayout,
-  createInitializeMint2Instruction,
-  createAssociatedTokenAccountInstruction,
-  createMintToInstruction,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
-import { assert } from "chai";
-import { readFileSync } from "node:fs";
 import type { PolybasketsEscrow } from "../target/types/polybaskets_escrow";
 
-// Loaded via fs (avoids JSON import-attribute issues under the ESM loader).
 const IDL = JSON.parse(readFileSync("target/idl/polybaskets_escrow.json", "utf8"));
-
-const DECIMALS = 6;
+const PROGRAM_ID = new PublicKey(IDL.address);
 const ONE_USDC = 1_000_000;
-const CHALLENGE_WINDOW_SECS = 12 * 60; // 720s — must match the on-chain constant.
-// Far-future expiry so warping the clock forward never expires a quote.
-const FAR_EXPIRY = 4_102_444_800n; // 2100-01-01
+const FAR_EXPIRY = 4_102_444_800;
+const COMPOSITION_DOMAIN = Buffer.from("ALPHABASKET_COMPOSITION_V1");
+const DEPOSIT_INTENT_DOMAIN = Buffer.from("ALPHABASKET_DEPOSIT_INTENT_V1");
+const WITHDRAWAL_INTENT_DOMAIN = Buffer.from(
+  "ALPHABASKET_WITHDRAWAL_INTENT_V1",
+);
+const MANAGEMENT_PERIOD_SECS = 30 * 24 * 60 * 60;
+const bytes32 = () => Buffer.from(Keypair.generate().publicKey.toBytes());
+const asArray = (value: Buffer) => [...value];
+const asNumber = (value: BN) => Number(value.toString());
 
-describe("polybaskets-escrow (bankrun)", () => {
+type BasketAsset = {
+  marketId: string;
+  kind: { predictionMarket: { outcome: number; ctfTokenId: number[] } };
+  weightBps: number;
+};
+
+const predictionMarket = (
+  marketId: string,
+  outcome: number,
+  weightBps: number,
+  ctfByte: number,
+): BasketAsset => ({
+  marketId,
+  kind: {
+    predictionMarket: {
+      outcome,
+      ctfTokenId: asArray(Buffer.alloc(32, ctfByte)),
+    },
+  },
+  weightBps,
+});
+
+const u16 = (value: number) => {
+  const bytes = Buffer.alloc(2);
+  bytes.writeUInt16LE(value);
+  return bytes;
+};
+
+const u32 = (value: number) => {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(value);
+  return bytes;
+};
+
+const u64 = (value: bigint | number) => {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(BigInt(value));
+  return bytes;
+};
+
+const i64 = (value: bigint | number) => {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigInt64LE(BigInt(value));
+  return bytes;
+};
+
+const canonicalComposition = (items: BasketAsset[]) =>
+  Buffer.concat([
+    u16(items.length),
+    ...items.map((item) => {
+      const market = Buffer.from(item.marketId);
+      const prediction = item.kind.predictionMarket;
+      return Buffer.concat([
+        u16(market.length),
+        market,
+        Buffer.from([0, prediction.outcome]),
+        Buffer.from(prediction.ctfTokenId),
+        u16(item.weightBps),
+      ]);
+    }),
+  ]);
+
+const hashComposition = (items: BasketAsset[]) =>
+  createHash("sha256").update(canonicalComposition(items)).digest();
+
+const feeCeil = (value: number, bps: number) =>
+  Math.floor((value * bps + 9_999) / 10_000);
+
+const feeFloor = (value: number, bps: number) =>
+  Math.floor((value * bps) / 10_000);
+
+const managementSharesForElapsed = (
+  supply: bigint,
+  elapsedSeconds: bigint,
+  remainder: bigint,
+) => {
+  const denominator = 9_965n * BigInt(MANAGEMENT_PERIOD_SECS);
+  const numerator = supply * 35n * elapsedSeconds + remainder;
+  return {
+    minted: numerator / denominator,
+    remainder: numerator % denominator,
+  };
+};
+
+describe("AlphaBasket v2 share accounting (bankrun)", () => {
   let context: ProgramTestContext;
   let provider: BankrunProvider;
   let banksClient: BanksClient;
   let program: Program<PolybasketsEscrow>;
   let payer: Keypair;
 
-  const oracleAuthority = Keypair.generate();
-  const quoteSigner = Keypair.generate();
+  const composer = Keypair.generate();
+  const backend = Keypair.generate();
+  const admin = Keypair.generate();
   const user = Keypair.generate();
-
-  let mint: PublicKey;
-  let userUsdc: PublicKey;
-  let treasuryUsdc: PublicKey;
-  let configPda: PublicKey;
+  const outsider = Keypair.generate();
+  const creator = Keypair.generate().publicKey;
+  const creatorFeeDestination = Keypair.generate().publicKey;
+  const protocolTreasury = Keypair.generate().publicKey;
+  const settlementMint = Keypair.generate().publicKey;
+  let config: PublicKey;
+  let compositionNonce = 0;
+  let settlementNonce = 0;
 
   const basketPda = (id: Buffer) =>
     PublicKey.findProgramAddressSync([Buffer.from("basket"), id], program.programId)[0];
-  const vaultPda = (id: Buffer) =>
-    PublicKey.findProgramAddressSync([Buffer.from("vault"), id], program.programId)[0];
-  const positionPda = (id: Buffer, owner: PublicKey) =>
-    PublicKey.findProgramAddressSync([Buffer.from("position"), id, owner.toBuffer()], program.programId)[0];
-
-  const newBasketId = () => Buffer.from(Keypair.generate().publicKey.toBytes());
-  const ITEMS = [
-    { marketId: "100", outcome: 1, weightBps: 6000 },
-    { marketId: "200", outcome: 0, weightBps: 4000 },
+  const positionPda = (basket: PublicKey, owner: PublicKey) =>
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), basket.toBuffer(), owner.toBuffer()],
+      program.programId,
+    )[0];
+  const receiptPda = (hash: Buffer) =>
+    PublicKey.findProgramAddressSync([Buffer.from("receipt"), hash], program.programId)[0];
+  const validItems: BasketAsset[] = [
+    predictionMarket("market-a", 1, 4_000, 1),
+    predictionMarket("market-b", 0, 3_500, 2),
+    predictionMarket("market-c", 1, 2_500, 3),
   ];
 
-  // ---- helpers ----
-  const sendTx = (ixs: TransactionInstruction[], signers: Keypair[] = []) => {
-    const tx = new Transaction().add(...ixs);
-    return provider.sendAndConfirm!(tx, signers);
-  };
+  const sendTx = (instructions: TransactionInstruction[], signers: Keypair[] = []) =>
+    provider.sendAndConfirm!(new Transaction().add(...instructions), signers);
 
-  /**
-   * Process a transaction expecting it to FAIL, and return the program logs.
-   * Uses banksClient directly because anchor-bankrun's thrown SendTransactionError
-   * drops the logs against newer @solana/web3.js.
-   */
-  async function expectRevert(ixs: TransactionInstruction[], signers: Keypair[], pattern: RegExp) {
-    // bankrun doesn't advance the blockhash, so a repeated identical tx is dropped
-    // as a duplicate before execution (no logs). A random compute-budget ix makes
-    // each tx unique. Placed first, so any ed25519-before-stake ordering still holds.
-    const salt = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: Math.floor(Math.random() * 1_000_000_000) });
-    const tx = new Transaction().add(salt, ...ixs);
+  async function expectRevert(
+    instructions: TransactionInstruction[],
+    signers: Keypair[],
+    pattern: RegExp,
+  ) {
+    const salt = ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: Math.floor(Math.random() * 1_000_000_000),
+    });
+    const tx = new Transaction().add(salt, ...instructions);
     tx.feePayer = payer.publicKey;
     tx.recentBlockhash = (await banksClient.getLatestBlockhash())![0];
     tx.sign(payer, ...signers);
-    const res = await banksClient.tryProcessTransaction(tx);
-    assert.isNotNull(res.result, "expected the transaction to fail");
-    const logs = (res.meta?.logMessages ?? []).join("\n");
-    assert.match(logs, pattern, `logs:\n${logs}`);
+    const result = await banksClient.tryProcessTransaction(tx);
+    assert.isNotNull(result.result, "expected transaction to fail");
+    const logs = (result.meta?.logMessages ?? []).join("\n");
+    assert.match(logs, pattern, "logs:\n" + logs);
   }
 
-  async function createMint(): Promise<PublicKey> {
-    const mintKp = Keypair.generate();
-    const rent = await banksClient.getRent();
-    const lamports = Number(rent.minimumBalance(BigInt(MINT_SIZE)));
-    await sendTx(
-      [
-        SystemProgram.createAccount({
-          fromPubkey: payer.publicKey,
-          newAccountPubkey: mintKp.publicKey,
-          space: MINT_SIZE,
-          lamports,
-          programId: TOKEN_PROGRAM_ID,
-        }),
-        createInitializeMint2Instruction(mintKp.publicKey, DECIMALS, payer.publicKey, null),
-      ],
-      [mintKp],
-    );
-    return mintKp.publicKey;
-  }
+  const fundSol = (recipient: PublicKey) =>
+    sendTx([
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: recipient,
+        lamports: 5_000_000_000,
+      }),
+    ]);
 
-  async function createAta(owner: PublicKey): Promise<PublicKey> {
-    const ata = getAssociatedTokenAddressSync(mint, owner);
-    await sendTx([createAssociatedTokenAccountInstruction(payer.publicKey, ata, owner, mint)]);
-    return ata;
-  }
-
-  const mintToAta = (ata: PublicKey, amount: number) =>
-    sendTx([createMintToInstruction(mint, ata, payer.publicKey, amount)]);
-
-  async function tokenBalance(ata: PublicKey): Promise<bigint> {
-    const acct = await banksClient.getAccount(ata);
-    if (!acct) return 0n;
-    return AccountLayout.decode(Buffer.from(acct.data)).amount;
-  }
-
-  const fundSol = (to: PublicKey, sol: number) =>
-    sendTx([SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: to, lamports: sol * 1_000_000_000 })]);
-
-  /** Fast-forward the bankrun clock by `secs` seconds. */
-  async function warpBy(secs: number) {
-    const c = await banksClient.getClock();
+  async function warpSeconds(seconds: number) {
+    const clock = await banksClient.getClock();
     context.setClock(
-      new Clock(c.slot, c.epochStartTimestamp, c.epoch, c.leaderScheduleEpoch, c.unixTimestamp + BigInt(secs)),
+      new Clock(
+        clock.slot,
+        clock.epochStartTimestamp,
+        clock.epoch,
+        clock.leaderScheduleEpoch,
+        clock.unixTimestamp + BigInt(seconds),
+      ),
     );
   }
 
-  // Canonical quote message: basket_id(32)+owner(32)+entryBps(u16 LE)+nonce(u64 LE)+expiry(i64 LE)
-  function quoteMessage(basketId: Buffer, owner: PublicKey, entryBps: number, nonce: bigint, expiry: bigint): Buffer {
-    const b = Buffer.alloc(82);
-    basketId.copy(b, 0);
-    owner.toBuffer().copy(b, 32);
-    b.writeUInt16LE(entryBps, 64);
-    b.writeBigUInt64LE(nonce, 66);
-    b.writeBigInt64LE(expiry, 74);
-    return b;
+  function compositionMessage(args: {
+    basketId: Buffer;
+    compositionHash: Buffer;
+    items: BasketAsset[];
+    performanceFeeBps: number;
+    isPerpetual: boolean;
+    reconstitutionCadenceSecs: number;
+    compositionNonce: number;
+    compositionExpiry: number;
+  }) {
+    return Buffer.concat([
+      COMPOSITION_DOMAIN,
+      program.programId.toBuffer(),
+      args.basketId,
+      creator.toBuffer(),
+      creatorFeeDestination.toBuffer(),
+      args.compositionHash,
+      u16(args.performanceFeeBps),
+      Buffer.from([args.isPerpetual ? 1 : 0]),
+      i64(args.reconstitutionCadenceSecs),
+      u64(args.compositionNonce),
+      i64(args.compositionExpiry),
+    ]);
   }
 
-  const ed25519Ix = (signer: Keypair, message: Buffer) =>
-    Ed25519Program.createInstructionWithPrivateKey({ privateKey: signer.secretKey, message });
-
-  /** Build the [ed25519-verify, stake] instruction pair. */
-  async function stakeIxs(opts: {
-    basketId: Buffer;
-    staker: Keypair;
-    stakerUsdc: PublicKey;
-    amount: number;
-    entryBps: number;
-    nonce: bigint;
-    quoteSignerKp?: Keypair;
-    quoteOverrideMsg?: Buffer;
-  }): Promise<TransactionInstruction[]> {
-    const { basketId, staker, stakerUsdc, amount, entryBps, nonce } = opts;
-    const msg = opts.quoteOverrideMsg ?? quoteMessage(basketId, staker.publicKey, entryBps, nonce, FAR_EXPIRY);
-    const edIx = ed25519Ix(opts.quoteSignerKp ?? quoteSigner, msg);
-    const stakeIx = await program.methods
-      .stake(new BN(amount), entryBps, new BN(nonce.toString()), new BN(FAR_EXPIRY.toString()))
-      .accountsPartial({
-        config: configPda,
+  async function buildCreateBasket(
+    basketId: Buffer,
+    options: {
+      items?: BasketAsset[];
+      signatureKey?: Keypair;
+      compositionHash?: Buffer;
+      performanceFeeBps?: number;
+      isPerpetual?: boolean;
+      reconstitutionCadenceSecs?: number;
+    } = {},
+  ) {
+    const items = options.items ?? validItems;
+    const args = {
+      basketId,
+      compositionHash: options.compositionHash ?? hashComposition(items),
+      items,
+      performanceFeeBps: options.performanceFeeBps ?? 1_000,
+      isPerpetual: options.isPerpetual ?? false,
+      reconstitutionCadenceSecs: options.reconstitutionCadenceSecs ?? 0,
+      compositionNonce: ++compositionNonce,
+      compositionExpiry: FAR_EXPIRY,
+    };
+    const signatureIx = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: (options.signatureKey ?? composer).secretKey,
+      message: compositionMessage(args),
+    });
+    const createIx = await program.methods
+      .createBasket({
+        basketId: asArray(args.basketId),
+        compositionHash: asArray(args.compositionHash),
+        items: args.items,
+        creator,
+        creatorFeeDestination,
+        performanceFeeBps:
+          options.performanceFeeBps === undefined
+            ? null
+            : options.performanceFeeBps,
+        isPerpetual: args.isPerpetual,
+        reconstitutionCadenceSecs: new BN(args.reconstitutionCadenceSecs),
+        compositionNonce: new BN(args.compositionNonce),
+        compositionExpiry: new BN(args.compositionExpiry),
+      })
+      .accountsStrict({
+        config,
         basket: basketPda(basketId),
-        vault: vaultPda(basketId),
-        position: positionPda(basketId, staker.publicKey),
-        stakerUsdc,
-        usdcMint: mint,
-        staker: staker.publicKey,
+        composerSigner: composer.publicKey,
         ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-        tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
-    return [edIx, stakeIx];
+    return { signatureIx, createIx };
   }
 
-  const stake = async (opts: Parameters<typeof stakeIxs>[0]) => sendTx(await stakeIxs(opts), [opts.staker]);
+  async function createBasket(
+    basketId: Buffer,
+    options: {
+      items?: BasketAsset[];
+      performanceFeeBps?: number;
+      isPerpetual?: boolean;
+      reconstitutionCadenceSecs?: number;
+    } = {},
+  ): Promise<PublicKey> {
+    const { signatureIx, createIx } = await buildCreateBasket(basketId, options);
+    await sendTx([signatureIx, createIx], [composer]);
+    return basketPda(basketId);
+  }
 
-  async function createBasket(basketId: Buffer) {
-    await program.methods
-      .createBasket([...basketId], ITEMS)
+  async function deposit(args: {
+    basket: PublicKey;
+    grossAmount: number;
+    basketNavValue: number;
+    sharePrice: number;
+    signatureKey?: Keypair;
+    intentNonce?: number;
+    intentExpiry?: number;
+    minSharesOut?: number;
+    executionVersion?: number;
+    executedAt?: number;
+    expectedError?: RegExp;
+  }) {
+    const position = positionPda(args.basket, user.publicKey);
+    const storedPosition = await program.account.position
+      .fetch(position)
+      .catch(() => null);
+    const intentNonce =
+      args.intentNonce ?? (storedPosition ? asNumber(storedPosition.lastIntentNonce) + 1 : 1);
+    const storedBasket = await program.account.basket.fetch(args.basket);
+    const expectedCompositionVersion = storedBasket.compositionVersion;
+    const protocolFee = feeCeil(args.grossAmount, 50);
+    const netDepositValue = args.grossAmount - protocolFee;
+    const sharesCredited = Math.floor(
+      (netDepositValue * ONE_USDC) / args.sharePrice,
+    );
+    const minSharesOut = args.minSharesOut ?? sharesCredited;
+    const intentExpiry = args.intentExpiry ?? FAR_EXPIRY;
+    const quoteHash = bytes32();
+    const executionBatchHash = bytes32();
+    const executedAt =
+      args.executedAt ?? Number((await banksClient.getClock()).unixTimestamp);
+    const completeArgs = {
+      user: user.publicKey,
+      intentNonce: new BN(intentNonce),
+      intentExpiry: new BN(intentExpiry),
+      expectedCompositionVersion,
+      grossAmount: new BN(args.grossAmount),
+      minSharesOut: new BN(minSharesOut),
+      quoteHash: asArray(quoteHash),
+      executionVersion: args.executionVersion ?? 1,
+      executionBatchHash: asArray(executionBatchHash),
+      executedAt: new BN(executedAt),
+      navReportHash: asArray(bytes32()),
+      settlementNonce: new BN(++settlementNonce),
+      basketNavValue: new BN(args.basketNavValue),
+      sharePrice: new BN(args.sharePrice),
+      netDepositValue: new BN(netDepositValue),
+      sharesCredited: new BN(sharesCredited),
+      protocolFee: new BN(protocolFee),
+    };
+    const intentMessage = Buffer.concat([
+      DEPOSIT_INTENT_DOMAIN,
+      program.programId.toBuffer(),
+      args.basket.toBuffer(),
+      user.publicKey.toBuffer(),
+      u64(intentNonce),
+      i64(intentExpiry),
+      u32(expectedCompositionVersion),
+      u64(args.grossAmount),
+      u64(minSharesOut),
+      quoteHash,
+    ]);
+    const signatureIx = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: (args.signatureKey ?? user).secretKey,
+      message: intentMessage,
+    });
+    const completeIx = await program.methods
+      .completeDeposit({
+        ...completeArgs,
+      })
       .accountsStrict({
-        config: configPda,
-        basket: basketPda(basketId),
-        vault: vaultPda(basketId),
-        usdcMint: mint,
-        creator: payer.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        config,
+        basket: args.basket,
+        position,
+        receipt: receiptPda(executionBatchHash),
+        backendSigner: backend.publicKey,
+        ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         systemProgram: SystemProgram.programId,
       })
-      .rpc();
+      .instruction();
+    if (args.expectedError) {
+      await expectRevert([signatureIx, completeIx], [backend], args.expectedError);
+    } else {
+      await sendTx([signatureIx, completeIx], [backend]);
+    }
+
+    return {
+      position,
+      receipt: receiptPda(executionBatchHash),
+      executionBatchHash,
+      executedAt,
+      intentNonce,
+      protocolFee,
+      netDepositValue,
+      sharesCredited,
+    };
   }
 
-  const settleAccounts = (basketId: Buffer, oracle: PublicKey) => ({
-    config: configPda,
-    basket: basketPda(basketId),
-    oracleAuthority: oracle,
-  });
-
-  const proposeIx = (basketId: Buffer, bps: number, oracle: PublicKey) =>
-    program.methods.proposeSettlement(bps).accounts(settleAccounts(basketId, oracle)).instruction();
-  const finalizeIx = (basketId: Buffer, oracle: PublicKey) =>
-    program.methods.finalizeSettlement().accounts(settleAccounts(basketId, oracle)).instruction();
-
-  const propose = (basketId: Buffer, bps: number) =>
-    program.methods.proposeSettlement(bps).accounts(settleAccounts(basketId, oracleAuthority.publicKey)).signers([oracleAuthority]).rpc();
-  const finalize = (basketId: Buffer) =>
-    program.methods.finalizeSettlement().accounts(settleAccounts(basketId, oracleAuthority.publicKey)).signers([oracleAuthority]).rpc();
-
-  /** Propose, warp past the 12-min window, then finalize. */
-  async function settle(basketId: Buffer, bps: number) {
-    await propose(basketId, bps);
-    await warpBy(CHALLENGE_WINDOW_SECS + 1);
-    await finalize(basketId);
-  }
-
-  const claimAccounts = (basketId: Buffer) => ({
-    config: configPda,
-    basket: basketPda(basketId),
-    vault: vaultPda(basketId),
-    position: positionPda(basketId, user.publicKey),
-    claimerUsdc: userUsdc,
-    usdcMint: mint,
-    claimer: user.publicKey,
-    tokenProgram: TOKEN_PROGRAM_ID,
-  });
-  const claimIx = (basketId: Buffer) => program.methods.claim().accountsPartial(claimAccounts(basketId)).instruction();
-  const claim = (basketId: Buffer) => program.methods.claim().accountsPartial(claimAccounts(basketId)).signers([user]).rpc();
-
-  const fund = (basketId: Buffer, funderUsdc: PublicKey, amount: number) =>
-    program.methods
-      .fundBasket(new BN(amount))
-      .accountsStrict({
-        config: configPda,
-        basket: basketPda(basketId),
-        vault: vaultPda(basketId),
-        funderUsdc,
-        usdcMint: mint,
-        funder: payer.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
+  async function withdraw(args: {
+    basket: PublicKey;
+    shareAmount: number;
+    basketNavValue: number;
+    sharePrice: number;
+    grossRealizedValue: number;
+    protocolFee: number;
+    creatorFee: number;
+    userValueOut: number;
+    destination?: PublicKey;
+    signatureKey?: Keypair;
+    intentNonce?: number;
+    intentExpiry?: number;
+    minValueOut?: number;
+    executionVersion?: number;
+    executedAt?: number;
+    expectedError?: RegExp;
+  }) {
+    const position = positionPda(args.basket, user.publicKey);
+    const storedPosition = await program.account.position.fetch(position);
+    const intentNonce =
+      args.intentNonce ?? asNumber(storedPosition.lastIntentNonce) + 1;
+    const storedBasket = await program.account.basket.fetch(args.basket);
+    const expectedCompositionVersion = storedBasket.compositionVersion;
+    const intentExpiry = args.intentExpiry ?? FAR_EXPIRY;
+    const destination = args.destination ?? user.publicKey;
+    const minValueOut = args.minValueOut ?? args.userValueOut;
+    const quoteHash = bytes32();
+    const executionBatchHash = bytes32();
+    const executedAt =
+      args.executedAt ?? Number((await banksClient.getClock()).unixTimestamp);
+    const completeArgs = {
+      user: user.publicKey,
+      intentNonce: new BN(intentNonce),
+      intentExpiry: new BN(intentExpiry),
+      expectedCompositionVersion,
+      shareAmount: new BN(args.shareAmount),
+      minValueOut: new BN(minValueOut),
+      destination,
+      quoteHash: asArray(quoteHash),
+      executionVersion: args.executionVersion ?? 1,
+      executionBatchHash: asArray(executionBatchHash),
+      executedAt: new BN(executedAt),
+      navReportHash: asArray(bytes32()),
+      settlementNonce: new BN(++settlementNonce),
+      basketNavValue: new BN(args.basketNavValue),
+      sharePrice: new BN(args.sharePrice),
+      grossRealizedValue: new BN(args.grossRealizedValue),
+      protocolFee: new BN(args.protocolFee),
+      creatorFee: new BN(args.creatorFee),
+      userValueOut: new BN(args.userValueOut),
+    };
+    const intentMessage = Buffer.concat([
+      WITHDRAWAL_INTENT_DOMAIN,
+      program.programId.toBuffer(),
+      args.basket.toBuffer(),
+      user.publicKey.toBuffer(),
+      u64(intentNonce),
+      i64(intentExpiry),
+      u32(expectedCompositionVersion),
+      u64(args.shareAmount),
+      u64(minValueOut),
+      destination.toBuffer(),
+      quoteHash,
+    ]);
+    const signatureIx = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: (args.signatureKey ?? user).secretKey,
+      message: intentMessage,
+    });
+    const completeIx = await program.methods
+      .completeWithdrawal({
+        ...completeArgs,
       })
-      .rpc();
+      .accountsStrict({
+        config,
+        basket: args.basket,
+        position,
+        receipt: receiptPda(executionBatchHash),
+        backendSigner: backend.publicKey,
+        ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    if (args.expectedError) {
+      await expectRevert([signatureIx, completeIx], [backend], args.expectedError);
+    } else {
+      await sendTx([signatureIx, completeIx], [backend]);
+    }
+
+    return {
+      position,
+      receipt: receiptPda(executionBatchHash),
+      executionBatchHash,
+      executedAt,
+      intentNonce,
+    };
+  }
 
   before(async () => {
-    context = await startAnchor("", [], []);
+    const [configAddress, configBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config")],
+      PROGRAM_ID,
+    );
+    config = configAddress;
+    const encodedConfig = await new BorshAccountsCoder(IDL as anchor.Idl).encode(
+      "Config",
+      {
+        admin: admin.publicKey,
+        pending_admin: null,
+        composer_signer: composer.publicKey,
+        backend_signer: backend.publicKey,
+        protocol_treasury: protocolTreasury,
+        settlement_mint: settlementMint,
+        max_slippage_bps: 1_000,
+        accounting_decimals: 6,
+        paused: false,
+        bump: configBump,
+      },
+    );
+    // Leave room for pending_admin to transition from None to Some(pubkey).
+    // Bankrun preloads raw account data and does not perform Anchor reallocs.
+    const configData = Buffer.alloc(256);
+    encodedConfig.copy(configData);
+    // Bankrun loads test programs under the legacy loader, while production
+    // initialization now requires the upgradeable ProgramData authority.
+    context = await startAnchor("", [], [
+      {
+        address: config,
+        info: {
+          lamports: 10_000_000,
+          data: configData,
+          owner: PROGRAM_ID,
+          executable: false,
+          rentEpoch: 0,
+        },
+      },
+    ]);
     provider = new BankrunProvider(context);
     anchor.setProvider(provider);
     banksClient = context.banksClient;
     program = new Program<PolybasketsEscrow>(IDL as anchor.Idl, provider);
     payer = (provider.wallet as anchor.Wallet).payer;
+    assert.isTrue(program.programId.equals(PROGRAM_ID));
+    await fundSol(admin.publicKey);
+    await fundSol(composer.publicKey);
+    await fundSol(backend.publicKey);
+    await fundSol(user.publicKey);
+    await fundSol(outsider.publicKey);
 
-    [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
-    [treasuryUsdc] = PublicKey.findProgramAddressSync([Buffer.from("treasury-usdc")], program.programId);
+  });
 
-    await fundSol(user.publicKey, 5);
-    mint = await createMint();
-    userUsdc = await createAta(user.publicKey);
-    await mintToAta(userUsdc, 5_000 * ONE_USDC);
-
+  it("requires the proposed admin to accept authority", async () => {
+    const nextAdmin = Keypair.generate();
+    await fundSol(nextAdmin.publicKey);
     await program.methods
-      .initialize(oracleAuthority.publicKey, quoteSigner.publicKey)
-      .accountsStrict({
-        config: configPda,
-        treasuryUsdc,
-        usdcMint: mint,
-        admin: payer.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
+      .proposeAdmin(nextAdmin.publicKey)
+      .accountsStrict({ config, admin: admin.publicKey })
+      .signers([admin])
       .rpc();
 
-    const config = await program.account.config.fetch(configPda);
-    assert.isTrue((config.treasuryUsdc as PublicKey).equals(treasuryUsdc));
-    assert.isNotNull(await banksClient.getAccount(treasuryUsdc));
-  });
-
-  it("full happy path: stake -> settle -> fund -> claim with profit", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-
-    const treasuryBeforeDeposit = await tokenBalance(treasuryUsdc);
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 100 * ONE_USDC, entryBps: 6000, nonce: 1n });
-    assert.equal(Number(await tokenBalance(vaultPda(basketId))), 98 * ONE_USDC, "vault holds net stake after 2% fee");
-    assert.equal(
-      Number((await tokenBalance(treasuryUsdc)) - treasuryBeforeDeposit),
-      2 * ONE_USDC,
-      "2% deposit fee reaches treasury",
+    const unauthorizedAccept = await program.methods
+      .acceptAdmin()
+      .accountsStrict({ config, pendingAdmin: outsider.publicKey })
+      .instruction();
+    await expectRevert(
+      [unauthorizedAccept],
+      [outsider],
+      /AdminTransferNotPending/,
     );
 
-    await settle(basketId, 9000); // payout = 100 * 9000/6000 = 150
+    await program.methods
+      .acceptAdmin()
+      .accountsStrict({ config, pendingAdmin: nextAdmin.publicKey })
+      .signers([nextAdmin])
+      .rpc();
+    let stored = await program.account.config.fetch(config);
+    assert.isTrue(stored.admin.equals(nextAdmin.publicKey));
+    assert.isNull(stored.pendingAdmin);
 
-    await mintToAta(treasuryUsdc, 50 * ONE_USDC);
-    await fund(basketId, treasuryUsdc, 50 * ONE_USDC);
+    await program.methods
+      .proposeAdmin(admin.publicKey)
+      .accountsStrict({ config, admin: nextAdmin.publicKey })
+      .signers([nextAdmin])
+      .rpc();
+    await program.methods
+      .acceptAdmin()
+      .accountsStrict({ config, pendingAdmin: admin.publicKey })
+      .signers([admin])
+      .rpc();
+    stored = await program.account.config.fetch(config);
+    assert.isTrue(stored.admin.equals(admin.publicKey));
+  });
 
-    const before = Number(await tokenBalance(userUsdc));
-    const treasuryBeforeClaim = await tokenBalance(treasuryUsdc);
-    await claim(basketId);
-    const after = Number(await tokenBalance(userUsdc));
-    // Gross payout = 98 * 9000/6000 = 147; withdrawal fee = 2.94.
-    assert.equal(after - before, 144_060_000, "claim receives gross payout less 2% withdrawal fee");
-    assert.equal(
-      Number((await tokenBalance(treasuryUsdc)) - treasuryBeforeClaim),
-      2_940_000,
-      "2% withdrawal fee reaches treasury",
+  it("verifies Composer authorization, composition rules, and the 20% creator-fee cap", async () => {
+    const unauthorized = await buildCreateBasket(bytes32(), {
+      signatureKey: outsider,
+    });
+    await expectRevert(
+      [unauthorized.signatureIx, unauthorized.createIx],
+      [composer],
+      /UnauthorizedCompositionSigner/,
     );
-  });
 
-  it("rejects a forged quote (wrong signer)", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    const ixs = await stakeIxs({
-      basketId, staker: user, stakerUsdc: userUsdc, amount: 10 * ONE_USDC, entryBps: 5000, nonce: 10n,
-      quoteSignerKp: Keypair.generate(),
+    const overweightItems: BasketAsset[] = [
+      predictionMarket("market-a", 1, 4_001, 4),
+      predictionMarket("market-b", 0, 3_499, 5),
+      predictionMarket("market-c", 1, 2_500, 6),
+    ];
+    const overweight = await buildCreateBasket(bytes32(), {
+      items: overweightItems,
     });
-    await expectRevert(ixs, [user], /UnauthorizedQuoteSigner/);
-  });
+    await expectRevert(
+      [overweight.signatureIx, overweight.createIx],
+      [composer],
+      /MarketWeightExceeded/,
+    );
 
-  it("rejects a quote whose message doesn't match the args", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    const wrongMsg = quoteMessage(basketId, user.publicKey, 5000, 11n, FAR_EXPIRY); // signs 5000
-    const ixs = await stakeIxs({
-      basketId, staker: user, stakerUsdc: userUsdc, amount: 10 * ONE_USDC, entryBps: 4000, nonce: 11n,
-      quoteOverrideMsg: wrongMsg,
+    const duplicateCtfItems: BasketAsset[] = [
+      predictionMarket("market-a", 1, 4_000, 7),
+      predictionMarket("market-b", 0, 3_500, 7),
+      predictionMarket("market-c", 1, 2_500, 8),
+    ];
+    const duplicateCtf = await buildCreateBasket(bytes32(), {
+      items: duplicateCtfItems,
     });
-    await expectRevert(ixs, [user], /QuoteMismatch/);
-  });
+    await expectRevert(
+      [duplicateCtf.signatureIx, duplicateCtf.createIx],
+      [composer],
+      /InvalidBasketItems/,
+    );
 
-  it("rejects Ed25519 quotes that source verification bytes by instruction index", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    const ixs = await stakeIxs({
-      basketId,
-      staker: user,
-      stakerUsdc: userUsdc,
-      amount: 10 * ONE_USDC,
-      entryBps: 5000,
-      nonce: 12n,
+    const excessiveFee = await buildCreateBasket(bytes32(), {
+      performanceFeeBps: 2_001,
     });
+    await expectRevert(
+      [excessiveFee.signatureIx, excessiveFee.createIx],
+      [composer],
+      /InvalidBasisPoints/,
+    );
 
-    // expectRevert prepends a compute-budget instruction, so the Ed25519
-    // instruction is index 1. Explicitly referencing it still passes native
-    // verification, but the escrow must require u16::MAX/current-instruction
-    // sentinels to prevent cross-instruction quote substitution.
-    for (const offset of [4, 8, 14]) {
-      ixs[0].data.writeUInt16LE(1, offset);
-    }
-    await expectRevert(ixs, [user], /MalformedQuoteSignature/);
+    const basket = await createBasket(bytes32());
+    const stored = await program.account.basket.fetch(basket);
+    assert.equal(stored.performanceFeeBps, 1_000);
+    assert.isTrue(stored.protocolFeeDestination.equals(protocolTreasury));
+    assert.equal(stored.items.reduce((sum, item) => sum + item.weightBps, 0), 10_000);
+
+    const zeroFeeBasket = await createBasket(bytes32(), { performanceFeeBps: 0 });
+    const zeroFeeStored = await program.account.basket.fetch(zeroFeeBasket);
+    assert.equal(zeroFeeStored.performanceFeeBps, 0);
   });
 
-  it("rejects claim before settlement", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 10 * ONE_USDC, entryBps: 5000, nonce: 20n });
-    await expectRevert([await claimIx(basketId)], [user], /NotSettled/);
-  });
-
-  it("rejects settlement from a non-oracle signer", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    const notOracle = Keypair.generate();
-    await expectRevert([await proposeIx(basketId, 5000, notOracle.publicKey)], [notOracle], /has_one|ConstraintHasOne|2001/i);
-  });
-
-  it("enforces the 12-minute challenge window (clock warp): finalize too early reverts, then succeeds", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 10 * ONE_USDC, entryBps: 5000, nonce: 40n });
-
-    await propose(basketId, 5000);
-
-    // Immediately: window open -> revert.
-    await expectRevert([await finalizeIx(basketId, oracleAuthority.publicKey)], [oracleAuthority], /ChallengeWindowActive/);
-
-    // Warp 11 minutes — short of 12 -> still revert.
-    await warpBy(11 * 60);
-    await expectRevert([await finalizeIx(basketId, oracleAuthority.publicKey)], [oracleAuthority], /ChallengeWindowActive/);
-
-    // Warp past 12 min total -> succeeds.
-    await warpBy(90);
-    await finalize(basketId);
-    const basketAcct = await (program.account as any).basket.fetch(basketPda(basketId));
-    assert.equal(basketAcct.settlementIndexBps, 5000, "settlement promoted from proposed");
-  });
-
-  it("rejects finalize with no active proposal", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    await expectRevert([await finalizeIx(basketId, oracleAuthority.publicKey)], [oracleAuthority], /NoActiveProposal/);
-  });
-
-  it("rejects an underfunded claim, then succeeds after funding", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 100 * ONE_USDC, entryBps: 5000, nonce: 30n });
-
-    await settle(basketId, 10000); // payout 200, vault has 100 -> underfunded
-
-    await expectRevert([await claimIx(basketId)], [user], /InsufficientVaultLiquidity/);
-
-    await mintToAta(treasuryUsdc, 100 * ONE_USDC);
-    await fund(basketId, treasuryUsdc, 100 * ONE_USDC);
-    await claim(basketId);
-
-    await expectRevert([await claimIx(basketId)], [user], /AlreadyClaimed/);
-  });
-
-  it("enforces the 500 USDC cumulative per-user cap", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 500 * ONE_USDC, entryBps: 5000, nonce: 50n });
-    const overCap = await stakeIxs({
-      basketId,
-      staker: user,
-      stakerUsdc: userUsdc,
-      amount: ONE_USDC,
-      entryBps: 5000,
-      nonce: 51n,
+  it("rejects replayed composition nonces during reconstitution", async () => {
+    const basket = await createBasket(bytes32(), {
+      isPerpetual: true,
+      reconstitutionCadenceSecs: 1,
     });
-    await expectRevert(overCap, [user], /UserDepositLimitExceeded/);
+    await warpSeconds(2);
+    await program.methods
+      .beginReconstitution()
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
 
-    const position = await (program.account as any).position.fetch(positionPda(basketId, user.publicKey));
-    assert.equal(position.depositedAmount.toString(), String(500 * ONE_USDC));
-    assert.equal(position.stakeAmount.toString(), String(490 * ONE_USDC));
-  });
-
-  it("enforces the 10,000 USDC aggregate user-deposit cap per basket", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-
-    for (let i = 0; i < 20; i += 1) {
-      const staker = Keypair.generate();
-      await fundSol(staker.publicKey, 1);
-      const stakerUsdc = await createAta(staker.publicKey);
-      await mintToAta(stakerUsdc, 501 * ONE_USDC);
-      await stake({
-        basketId,
-        staker,
-        stakerUsdc,
-        amount: 500 * ONE_USDC,
-        entryBps: 5000,
-        nonce: 1n,
-      });
-    }
-
-    const overflowUser = Keypair.generate();
-    await fundSol(overflowUser.publicKey, 1);
-    const overflowUsdc = await createAta(overflowUser.publicKey);
-    await mintToAta(overflowUsdc, ONE_USDC);
-    const overCap = await stakeIxs({
-      basketId,
-      staker: overflowUser,
-      stakerUsdc: overflowUsdc,
-      amount: ONE_USDC,
-      entryBps: 5000,
-      nonce: 1n,
-    });
-    await expectRevert(overCap, [overflowUser], /BasketDepositLimitExceeded/);
-
-    const basket = await (program.account as any).basket.fetch(basketPda(basketId));
-    assert.equal(basket.totalDeposited.toString(), String(10_000 * ONE_USDC));
-    assert.equal(basket.totalStaked.toString(), String(9_800 * ONE_USDC));
-    assert.equal(basket.totalPositions, 20);
-  });
-
-  it("lets only the admin sweep surplus without changing settled basket state", async () => {
-    const basketId = newBasketId();
-    await createBasket(basketId);
-    await stake({ basketId, staker: user, stakerUsdc: userUsdc, amount: 100 * ONE_USDC, entryBps: 10_000, nonce: 60n });
-    await settle(basketId, 5_000); // gross payout 49, leaving 49 in the vault
-
-    const sweepIx = (admin: PublicKey) => program.methods
-      .sweepSurplus()
-      .accountsPartial({
-        config: configPda,
-        basket: basketPda(basketId),
-        vault: vaultPda(basketId),
-        usdcMint: mint,
-        admin,
-        tokenProgram: TOKEN_PROGRAM_ID,
+    const stored = await program.account.basket.fetch(basket);
+    const replay = await program.methods
+      .completeReconstitution({
+        compositionHash: asArray(hashComposition(validItems)),
+        items: validItems,
+        compositionNonce: stored.lastCompositionNonce,
+        compositionExpiry: new BN(FAR_EXPIRY),
+      })
+      .accountsStrict({
+        config,
+        basket,
+        backendSigner: backend.publicKey,
+        composerSigner: composer.publicKey,
+        ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .instruction();
-
-    await expectRevert([await sweepIx(payer.publicKey)], [], /OutstandingClaims/);
-    await claim(basketId);
-
-    const notAdmin = Keypair.generate();
-    await expectRevert([await sweepIx(notAdmin.publicKey)], [notAdmin], /has_one|ConstraintHasOne|2001/i);
-
-    const basketBeforeSweep = await (program.account as any).basket.fetch(basketPda(basketId));
-    const before = await tokenBalance(treasuryUsdc);
-    const sweepTx = new Transaction().add(await sweepIx(payer.publicKey));
-    sweepTx.feePayer = payer.publicKey;
-    sweepTx.recentBlockhash = (await banksClient.getLatestBlockhash())![0];
-    sweepTx.sign(payer);
-    const sweepResult = await banksClient.tryProcessTransaction(sweepTx);
-    assert.isNull(
-      sweepResult.result,
-      `sweep failed: ${sweepResult.result}\n${(sweepResult.meta?.logMessages ?? []).join("\n")}`,
+    await expectRevert(
+      [replay],
+      [backend, composer],
+      /CompositionNonceNotIncreasing/,
     );
-    const after = await tokenBalance(treasuryUsdc);
-    assert.equal(Number(after - before), 49 * ONE_USDC, "entire post-claim surplus reaches treasury");
-    assert.equal(Number(await tokenBalance(vaultPda(basketId))), 0);
-    const basket = await (program.account as any).basket.fetch(basketPda(basketId));
-    assert.isDefined(basket.status.settled);
-    assert.equal(basket.settlementIndexBps, basketBeforeSweep.settlementIndexBps);
-    assert.equal(basket.proposedIndexBps, basketBeforeSweep.proposedIndexBps);
-    assert.equal(basket.settlementProposedAt.toString(), basketBeforeSweep.settlementProposedAt.toString());
-    assert.equal(basket.totalDeposited.toString(), basketBeforeSweep.totalDeposited.toString());
-    assert.equal(basket.totalStaked.toString(), basketBeforeSweep.totalStaked.toString());
-    assert.equal(basket.totalPositions, basketBeforeSweep.totalPositions);
-    assert.equal(basket.claimedPositions, basketBeforeSweep.claimedPositions);
+  });
 
-    const newcomer = Keypair.generate();
-    await fundSol(newcomer.publicKey, 1);
-    const newcomerUsdc = await createAta(newcomer.publicKey);
-    await mintToAta(newcomerUsdc, 10 * ONE_USDC);
-    const newcomerDeposit = await stakeIxs({
-      basketId,
-      staker: newcomer,
-      stakerUsdc: newcomerUsdc,
-      amount: 10 * ONE_USDC,
-      entryBps: 5_000,
-      nonce: 1n,
+  it("uses $1 only for initialization, then mints at NAV divided by total shares", async () => {
+    const basket = await createBasket(bytes32());
+    const first = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
     });
-    await expectRevert(newcomerDeposit, [newcomer], /BasketNotActive/);
+    assert.equal(first.protocolFee, 500_000);
+    assert.equal(first.netDepositValue, 99_500_000);
+    assert.equal(first.sharesCredited, 99_500_000);
+
+    const second = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 199 * ONE_USDC,
+      sharePrice: 2 * ONE_USDC,
+    });
+    assert.equal(second.protocolFee, 500_000);
+    assert.equal(second.sharesCredited, 49_750_000);
+
+    const storedBasket = await program.account.basket.fetch(basket);
+    const storedPosition = await program.account.position.fetch(first.position);
+    const secondReceipt = await program.account.settlementReceipt.fetch(second.receipt);
+    assert.equal(asNumber(storedBasket.totalSharesOutstanding), 149_250_000);
+    assert.equal(asNumber(storedPosition.sharesOwned), 149_250_000);
+    assert.isAbove(asNumber(storedPosition.weightedDepositTimestamp), 0);
+    assert.equal(storedPosition.reserved.length, 64);
+    assert.equal(asNumber(secondReceipt.sharePrice), 2 * ONE_USDC);
+  });
+
+  it("keeps the 500 USDC per-user gross deposit cap", async () => {
+    const basket = await createBasket(bytes32());
+    await deposit({
+      basket,
+      grossAmount: 501 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      expectedError: /UserDepositLimitExceeded/,
+    });
+  });
+
+  it("requires the user's signature and rejects replayed intent nonces", async () => {
+    const basket = await createBasket(bytes32());
+    await deposit({
+      basket,
+      grossAmount: 10 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      signatureKey: outsider,
+      expectedError: /UnauthorizedIntentSigner/,
+    });
+
+    const first = await deposit({
+      basket,
+      grossAmount: 10 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await deposit({
+      basket,
+      grossAmount: 10 * ONE_USDC,
+      basketNavValue: first.netDepositValue,
+      sharePrice: ONE_USDC,
+      intentNonce: first.intentNonce,
+      expectedError: /IntentNonceMismatch/,
+    });
+
+    const storedPosition = await program.account.position.fetch(first.position);
+    assert.equal(asNumber(storedPosition.lastIntentNonce), first.intentNonce);
+    assert.equal(asNumber(storedPosition.sharesOwned), first.sharesCredited);
+  });
+
+  it("accrues 0.35% monthly by dilution and lets the backend redeem protocol shares", async () => {
+    const basket = await createBasket(bytes32());
+    const first = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await warpSeconds(3 * MANAGEMENT_PERIOD_SECS);
+
+    await program.methods
+      .accrueManagementFee()
+      .accountsStrict({ config, basket })
+      .rpc();
+
+    let expectedSupply = BigInt(first.sharesCredited);
+    let expectedProtocolShares = 0n;
+    let remainder = 0n;
+    for (let period = 0; period < 3; period += 1) {
+      const accrued = managementSharesForElapsed(
+        expectedSupply,
+        BigInt(MANAGEMENT_PERIOD_SECS),
+        remainder,
+      );
+      expectedSupply += accrued.minted;
+      expectedProtocolShares += accrued.minted;
+      remainder = accrued.remainder;
+    }
+    let storedBasket = await program.account.basket.fetch(basket);
+    assert.equal(
+      storedBasket.protocolFeeShares.toString(),
+      expectedProtocolShares.toString(),
+    );
+    assert.equal(
+      storedBasket.totalSharesOutstanding.toString(),
+      expectedSupply.toString(),
+    );
+
+    const executionBatchHash = bytes32();
+    const executedAt = Number((await banksClient.getClock()).unixTimestamp);
+    await program.methods
+      .completeProtocolFeeWithdrawal({
+        executionVersion: 1,
+        executionBatchHash: asArray(executionBatchHash),
+        executedAt: new BN(executedAt),
+        navReportHash: asArray(bytes32()),
+        settlementNonce: new BN(++settlementNonce),
+        shareAmount: new BN(expectedProtocolShares.toString()),
+        basketNavValue: new BN(expectedSupply.toString()),
+        sharePrice: new BN(ONE_USDC),
+        grossRealizedValue: new BN(expectedProtocolShares.toString()),
+      })
+      .accountsStrict({
+        config,
+        basket,
+        receipt: receiptPda(executionBatchHash),
+        backendSigner: backend.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([backend])
+      .rpc();
+
+    storedBasket = await program.account.basket.fetch(basket);
+    const receipt = await program.account.settlementReceipt.fetch(
+      receiptPda(executionBatchHash),
+    );
+    assert.equal(asNumber(storedBasket.protocolFeeShares), 0);
+    assert.equal(
+      storedBasket.totalSharesOutstanding.toString(),
+      BigInt(first.sharesCredited).toString(),
+    );
+    assert.isTrue(receipt.user.equals(protocolTreasury));
+    assert.equal(receipt.userValueOut.toString(), expectedProtocolShares.toString());
+  });
+
+  it("accrues a 45-day interval exactly before pricing a new deposit", async () => {
+    const basket = await createBasket(bytes32());
+    const first = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    const before = await program.account.basket.fetch(basket);
+    await warpSeconds(MANAGEMENT_PERIOD_SECS + MANAGEMENT_PERIOD_SECS / 2);
+
+    let expectedSupply = BigInt(first.sharesCredited);
+    let remainder = 0n;
+    const fullMonth = managementSharesForElapsed(
+      expectedSupply,
+      BigInt(MANAGEMENT_PERIOD_SECS),
+      remainder,
+    );
+    expectedSupply += fullMonth.minted;
+    remainder = fullMonth.remainder;
+    const halfMonth = managementSharesForElapsed(
+      expectedSupply,
+      BigInt(MANAGEMENT_PERIOD_SECS / 2),
+      remainder,
+    );
+    expectedSupply += halfMonth.minted;
+
+    const second = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: Number(expectedSupply),
+      sharePrice: ONE_USDC,
+    });
+    const after = await program.account.basket.fetch(basket);
+    assert.equal(
+      asNumber(after.lastManagementFeeAt) - asNumber(before.lastManagementFeeAt),
+      MANAGEMENT_PERIOD_SECS + MANAGEMENT_PERIOD_SECS / 2,
+    );
+    assert.equal(
+      after.totalSharesOutstanding.toString(),
+      (expectedSupply + BigInt(second.sharesCredited)).toString(),
+    );
+    assert.equal(
+      after.managementFeeAccrualRemainder.toString(),
+      halfMonth.remainder.toString(),
+    );
+  });
+
+  it("stores the versioned execution batch atomically in the deposit receipt", async () => {
+    const basket = await createBasket(bytes32());
+    const completed = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+
+    const receipt = await program.account.settlementReceipt.fetch(completed.receipt);
+    assert.equal(receipt.executionVersion, 1);
+    assert.deepEqual(
+      [...receipt.executionBatchHash],
+      [...completed.executionBatchHash],
+    );
+    assert.equal(asNumber(receipt.executedAt), completed.executedAt);
+
+    await deposit({
+      basket,
+      grossAmount: ONE_USDC,
+      basketNavValue: completed.sharesCredited,
+      sharePrice: ONE_USDC,
+      executionVersion: 2,
+      expectedError: /InvalidExecutionVersion/,
+    });
+  });
+
+  it("charges 2% early withdrawal plus creator performance fee only on profit", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    const gross = 199 * ONE_USDC;
+    const profit = gross - entry.netDepositValue;
+    const creatorFee = feeFloor(profit, 1_000);
+    const protocolFee = feeCeil(gross, 200);
+    const userValueOut = gross - creatorFee - protocolFee;
+    const exit = await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: gross,
+      sharePrice: 2 * ONE_USDC,
+      grossRealizedValue: gross,
+      protocolFee,
+      creatorFee,
+      userValueOut,
+    });
+
+    const receipt = await program.account.settlementReceipt.fetch(exit.receipt);
+    const storedPosition = await program.account.position.fetch(exit.position);
+    assert.equal(asNumber(receipt.withdrawnCostBasis), 99_500_000);
+    assert.equal(asNumber(receipt.realizedProfit), 99_500_000);
+    assert.equal(asNumber(receipt.creatorFee), 9_950_000);
+    assert.equal(asNumber(receipt.protocolFee), 3_980_000);
+    assert.equal(asNumber(receipt.earlyExitValue), 199_000_000);
+    assert.equal(asNumber(receipt.matureExitValue), 0);
+    assert.equal(asNumber(receipt.userValueOut), 185_070_000);
+    assert.equal(asNumber(storedPosition.sharesOwned), 0);
+    const storedBasket = await program.account.basket.fetch(basket);
+    assert.deepEqual(storedBasket.status, { closed: {} });
+
+    await deposit({
+      basket,
+      grossAmount: 10 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      expectedError: /InvalidBasketStatus/,
+    });
+  });
+
+  it("uses a cost-basis-weighted holding timestamp for the withdrawal tier", async () => {
+    const basket = await createBasket(bytes32());
+    await deposit({
+      basket,
+      grossAmount: 50 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await warpSeconds(2 * MANAGEMENT_PERIOD_SECS + 24 * 60 * 60);
+    await program.methods
+      .accrueManagementFee()
+      .accountsStrict({ config, basket })
+      .rpc();
+
+    const beforeSecond = await program.account.basket.fetch(basket);
+    const navAtOneDollar = asNumber(beforeSecond.totalSharesOutstanding);
+    await deposit({
+      basket,
+      grossAmount: 50 * ONE_USDC,
+      basketNavValue: navAtOneDollar,
+      sharePrice: ONE_USDC,
+    });
+
+    const userShares = 99_500_000;
+    const protocolFee = feeCeil(userShares, 200);
+    const userValueOut = userShares - protocolFee;
+    const beforeExit = await program.account.basket.fetch(basket);
+    const exit = await withdraw({
+      basket,
+      shareAmount: userShares,
+      basketNavValue: asNumber(beforeExit.totalSharesOutstanding),
+      sharePrice: ONE_USDC,
+      grossRealizedValue: userShares,
+      protocolFee,
+      creatorFee: 0,
+      userValueOut,
+    });
+
+    const receipt = await program.account.settlementReceipt.fetch(exit.receipt);
+    assert.equal(asNumber(receipt.matureExitValue), 0);
+    assert.equal(asNumber(receipt.earlyExitValue), userShares);
+    assert.equal(asNumber(receipt.protocolFee), 1_990_000);
+    assert.equal(asNumber(receipt.creatorFee), 0);
+    assert.equal(asNumber(receipt.userValueOut), 97_510_000);
+  });
+
+  it("applies the same fee rules to final redemption and closes an exhausted basket", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await program.methods
+      .beginResolution()
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+
+    const finalNavValue = 120 * ONE_USDC;
+    await program.methods
+      .recordFinalSettlement({
+        finalReportHash: asArray(bytes32()),
+        finalNavValue: new BN(finalNavValue),
+        finalShareSnapshot: new BN(entry.sharesCredited),
+      })
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+    await warpSeconds(3 * MANAGEMENT_PERIOD_SECS + 1);
+
+    const creatorFee = feeFloor(
+      finalNavValue - entry.netDepositValue,
+      1_000,
+    );
+    const protocolFee = feeCeil(finalNavValue, 100);
+    const userValueOut = finalNavValue - creatorFee - protocolFee;
+    const finalSharePrice = Math.floor(
+      (finalNavValue * ONE_USDC) / entry.sharesCredited,
+    );
+    const exit = await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: finalNavValue,
+      sharePrice: finalSharePrice,
+      grossRealizedValue: finalNavValue,
+      protocolFee,
+      creatorFee,
+      userValueOut,
+    });
+
+    const receipt = await program.account.settlementReceipt.fetch(exit.receipt);
+    const storedBasket = await program.account.basket.fetch(basket);
+    assert.equal(asNumber(receipt.creatorFee), 2_050_000);
+    assert.equal(asNumber(receipt.protocolFee), 1_200_000);
+    assert.equal(asNumber(receipt.userValueOut), 116_750_000);
+    assert.deepEqual(storedBasket.status, { closed: {} });
+    assert.equal(asNumber(storedBasket.protocolFeeShares), 0);
+  });
+
+  it("allows a zero-NAV final redemption so a total-loss basket can close", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 25 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await program.methods
+      .beginResolution()
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+    await program.methods
+      .recordFinalSettlement({
+        finalReportHash: asArray(bytes32()),
+        finalNavValue: new BN(0),
+        finalShareSnapshot: new BN(entry.sharesCredited),
+      })
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+
+    await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: 0,
+      sharePrice: 0,
+      grossRealizedValue: 0,
+      protocolFee: 0,
+      creatorFee: 0,
+      userValueOut: 0,
+    });
+    const storedBasket = await program.account.basket.fetch(basket);
+    assert.deepEqual(storedBasket.status, { closed: {} });
+    assert.equal(asNumber(storedBasket.totalSharesOutstanding), 0);
+  });
+
+  it("closes an empty basket without trapping it in resolution", async () => {
+    const basket = await createBasket(bytes32());
+    await program.methods
+      .beginResolution()
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+    await program.methods
+      .recordFinalSettlement({
+        finalReportHash: asArray(bytes32()),
+        finalNavValue: new BN(0),
+        finalShareSnapshot: new BN(0),
+      })
+      .accountsStrict({ config, basket, backendSigner: backend.publicKey })
+      .signers([backend])
+      .rpc();
+
+    const storedBasket = await program.account.basket.fetch(basket);
+    assert.deepEqual(storedBasket.status, { closed: {} });
+  });
+
+  it("rejects an expired signed intent without changing accounting", async () => {
+    const basket = await createBasket(bytes32());
+    const position = positionPda(basket, user.publicKey);
+    await deposit({
+      basket,
+      grossAmount: 50 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      intentExpiry: 0,
+      expectedError: /IntentExpired/,
+    });
+
+    const storedPosition = await program.account.position.fetch(position).catch(() => null);
+    const storedBasket = await program.account.basket.fetch(basket);
+    assert.isNull(storedPosition);
+    assert.equal(asNumber(storedBasket.totalSharesOutstanding), 0);
   });
 });

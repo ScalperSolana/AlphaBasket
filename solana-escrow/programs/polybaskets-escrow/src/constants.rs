@@ -19,7 +19,8 @@ pub const DEFAULT_CREATOR_PERFORMANCE_FEE_BPS: u16 = 1_000;
 pub const MANAGEMENT_FEE_PERIOD_SECS: i64 = 30 * 24 * 60 * 60;
 pub const MATURE_HOLDING_PERIOD_SECS: i64 = 60 * 24 * 60 * 60;
 pub const MAX_MANAGEMENT_FEE_PERIODS: u64 = 600;
-pub const MAX_DEPOSIT_LOTS: usize = 64;
+pub const POSITION_RESERVED_BYTES: usize = 64;
+pub const EXECUTION_BATCH_VERSION: u8 = 1;
 
 /// Native Ed25519 signature-verification program.
 pub const ED25519_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
