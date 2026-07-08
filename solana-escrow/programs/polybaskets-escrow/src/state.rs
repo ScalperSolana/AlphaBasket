@@ -95,7 +95,11 @@ pub struct Basket {
 
 #[account]
 #[derive(InitSpace)]
-/// A user's shares, cost basis, and weighted holding timestamp for one basket.
+/// A user's shares, performance-fee basis, and weighted holding timestamp.
+/// `cost_basis_value` is the aggregate HWM/equalization basis of the remaining
+/// shares. Partial redemptions remove only their proportional basis; they do
+/// not raise the per-share basis of unredeemed shares unless those shares also
+/// crystallize a performance fee.
 pub struct Position {
     pub owner: Pubkey,
     pub basket: Pubkey,

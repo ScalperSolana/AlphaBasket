@@ -944,6 +944,65 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     });
   });
 
+  it("crystallizes performance fees only on redeemed shares and preserves remaining HWM basis", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    const halfShares = entry.sharesCredited / 2;
+
+    const firstGross = Math.floor((halfShares * 1_500_000) / ONE_USDC);
+    const firstBasis = entry.netDepositValue / 2;
+    const firstCreatorFee = feeFloor(firstGross - firstBasis, 1_000);
+    const firstProtocolFee = feeCeil(firstGross, 200);
+    const firstExit = await withdraw({
+      basket,
+      shareAmount: halfShares,
+      basketNavValue: entry.sharesCredited * 1.5,
+      sharePrice: 1_500_000,
+      grossRealizedValue: firstGross,
+      protocolFee: firstProtocolFee,
+      creatorFee: firstCreatorFee,
+      userValueOut: firstGross - firstProtocolFee - firstCreatorFee,
+    });
+
+    const firstReceipt = await program.account.settlementReceipt.fetch(
+      firstExit.receipt,
+    );
+    const remaining = await program.account.position.fetch(firstExit.position);
+    assert.equal(asNumber(firstReceipt.withdrawnCostBasis), firstBasis);
+    assert.equal(asNumber(firstReceipt.creatorFee), firstCreatorFee);
+    assert.equal(asNumber(remaining.sharesOwned), halfShares);
+    assert.equal(asNumber(remaining.costBasisValue), firstBasis);
+
+    const secondGross = Math.floor((halfShares * 1_800_000) / ONE_USDC);
+    const secondCreatorFee = feeFloor(secondGross - firstBasis, 1_000);
+    const secondProtocolFee = feeCeil(secondGross, 200);
+    const secondExit = await withdraw({
+      basket,
+      shareAmount: halfShares,
+      basketNavValue: secondGross,
+      sharePrice: 1_800_000,
+      grossRealizedValue: secondGross,
+      protocolFee: secondProtocolFee,
+      creatorFee: secondCreatorFee,
+      userValueOut: secondGross - secondProtocolFee - secondCreatorFee,
+    });
+
+    const secondReceipt = await program.account.settlementReceipt.fetch(
+      secondExit.receipt,
+    );
+    assert.equal(asNumber(secondReceipt.withdrawnCostBasis), firstBasis);
+    assert.equal(asNumber(secondReceipt.creatorFee), secondCreatorFee);
+    assert.equal(
+      firstCreatorFee + secondCreatorFee,
+      feeFloor(firstGross + secondGross - entry.netDepositValue, 1_000),
+    );
+  });
+
   it("uses a cost-basis-weighted holding timestamp for the withdrawal tier", async () => {
     const basket = await createBasket(bytes32());
     await deposit({

@@ -102,8 +102,10 @@ pub fn fee_floor(amount: u64, fee_bps: u16) -> Result<u64> {
     u64::try_from(fee).map_err(|_| error!(EscrowError::MathOverflow))
 }
 
-/// Allocates cost basis to a partial redemption. Partial allocations round up
-/// in the user's favour; a full redemption consumes the exact remaining basis.
+/// Allocates performance-fee basis to redeemed shares. Partial allocations
+/// round up in the user's favour; a full redemption consumes the exact
+/// remaining basis. The unallocated basis remains attached to unredeemed
+/// shares, so their accrued profit is neither double-charged nor forgiven.
 pub fn cost_basis_for_shares(
     cost_basis: u64,
     shares_redeemed: u64,
