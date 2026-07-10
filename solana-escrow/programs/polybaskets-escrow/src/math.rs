@@ -129,12 +129,15 @@ pub fn cost_basis_for_shares(
 }
 
 /// Minimum acceptable output derived from a quoted output and tolerance.
+/// Rounds up so the accepted loss can never exceed the configured tolerance
+/// by one accounting unit.
 pub fn minimum_after_slippage(quoted_out: u64, tolerance_bps: u16) -> Result<u64> {
     let retained_bps = MAX_BPS
         .checked_sub(tolerance_bps)
         .ok_or(EscrowError::InvalidBasisPoints)?;
     let minimum = (quoted_out as u128)
         .checked_mul(retained_bps as u128)
+        .and_then(|value| value.checked_add(MAX_BPS as u128 - 1))
         .and_then(|value| value.checked_div(MAX_BPS as u128))
         .ok_or(EscrowError::MathOverflow)?;
     u64::try_from(minimum).map_err(|_| error!(EscrowError::MathOverflow))
@@ -194,5 +197,9 @@ mod tests {
             minimum_after_slippage(100_000_000, 200).unwrap(),
             98_000_000
         );
+        assert_eq!(minimum_after_slippage(101, 100).unwrap(), 100);
+        assert_eq!(minimum_after_slippage(u64::MAX, 0).unwrap(), u64::MAX);
+        assert_eq!(minimum_after_slippage(u64::MAX, MAX_BPS).unwrap(), 0);
+        assert!(minimum_after_slippage(1, MAX_BPS + 1).is_err());
     }
 }
