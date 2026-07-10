@@ -64,7 +64,7 @@ pub enum EscrowError {
     CompositionVersionMismatch,
     #[msg("Protocol fee does not match basket rules")]
     FeeMismatch,
-    #[msg("Settlement result is below the user's minimum accepted value")]
+    #[msg("Settlement result exceeds the protocol or user slippage limit")]
     SlippageExceeded,
     #[msg("Minimum output does not enforce the requested slippage tolerance")]
     InvalidMinimumOutput,

@@ -107,6 +107,11 @@ const feeCeil = (value: number, bps: number) =>
 const feeFloor = (value: number, bps: number) =>
   Math.floor((value * bps) / 10_000);
 
+const minimumAfterSlippage = (value: number, bps: number) =>
+  Number(
+    (BigInt(value) * BigInt(10_000 - bps) + 9_999n) / 10_000n,
+  );
+
 const managementSharesForElapsed = (
   supply: bigint,
   elapsedSeconds: bigint,
@@ -299,6 +304,7 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     intentNonce?: number;
     intentExpiry?: number;
     minSharesOut?: number;
+    netDepositValue?: number;
     executionVersion?: number;
     executedAt?: number;
     expectedError?: RegExp;
@@ -312,7 +318,8 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     const storedBasket = await program.account.basket.fetch(args.basket);
     const expectedCompositionVersion = storedBasket.compositionVersion;
     const protocolFee = feeCeil(args.grossAmount, 50);
-    const netDepositValue = args.grossAmount - protocolFee;
+    const quotedNetDepositValue = args.grossAmount - protocolFee;
+    const netDepositValue = args.netDepositValue ?? quotedNetDepositValue;
     const sharesCredited = Math.floor(
       (netDepositValue * ONE_USDC) / args.sharePrice,
     );
@@ -484,6 +491,47 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       executionBatchHash,
       executedAt,
       intentNonce,
+    };
+  }
+
+  async function withdrawProtocolFees(args: {
+    basket: PublicKey;
+    shareAmount: number;
+    basketNavValue: number;
+    sharePrice: number;
+    grossRealizedValue: number;
+    expectedError?: RegExp;
+  }) {
+    const executionBatchHash = bytes32();
+    const executedAt = Number((await banksClient.getClock()).unixTimestamp);
+    const completeIx = await program.methods
+      .completeProtocolFeeWithdrawal({
+        executionVersion: 1,
+        executionBatchHash: asArray(executionBatchHash),
+        executedAt: new BN(executedAt),
+        navReportHash: asArray(bytes32()),
+        settlementNonce: new BN(++settlementNonce),
+        shareAmount: new BN(args.shareAmount),
+        basketNavValue: new BN(args.basketNavValue),
+        sharePrice: new BN(args.sharePrice),
+        grossRealizedValue: new BN(args.grossRealizedValue),
+      })
+      .accountsStrict({
+        config,
+        basket: args.basket,
+        receipt: receiptPda(executionBatchHash),
+        backendSigner: backend.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    if (args.expectedError) {
+      await expectRevert([completeIx], [backend], args.expectedError);
+    } else {
+      await sendTx([completeIx], [backend]);
+    }
+    return {
+      receipt: receiptPda(executionBatchHash),
+      executionBatchHash,
     };
   }
 
@@ -706,6 +754,56 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     assert.equal(asNumber(secondReceipt.sharePrice), 2 * ONE_USDC);
   });
 
+  it("mints from actual deposit credit while enforcing the protocol slippage floor", async () => {
+    const basket = await createBasket(bytes32());
+    const grossAmount = 100 * ONE_USDC;
+    const quotedNet = grossAmount - feeCeil(grossAmount, 50);
+    const minimumNet = minimumAfterSlippage(quotedNet, 1_000);
+
+    await deposit({
+      basket,
+      grossAmount,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      netDepositValue: quotedNet + 1,
+      expectedError: /InvalidSettlementValues/,
+    });
+    await deposit({
+      basket,
+      grossAmount,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      netDepositValue: minimumNet - 1,
+      expectedError: /SlippageExceeded/,
+    });
+    await deposit({
+      basket,
+      grossAmount,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      netDepositValue: minimumNet,
+      minSharesOut: minimumNet + 1,
+      expectedError: /SlippageExceeded/,
+    });
+
+    const completed = await deposit({
+      basket,
+      grossAmount,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+      netDepositValue: minimumNet,
+    });
+    const storedBasket = await program.account.basket.fetch(basket);
+    const storedPosition = await program.account.position.fetch(completed.position);
+    const receipt = await program.account.settlementReceipt.fetch(completed.receipt);
+
+    assert.equal(completed.sharesCredited, minimumNet);
+    assert.equal(asNumber(storedBasket.totalSharesOutstanding), minimumNet);
+    assert.equal(asNumber(storedPosition.costBasisValue), minimumNet);
+    assert.equal(asNumber(receipt.grossValue), minimumNet);
+    assert.equal(asNumber(receipt.protocolFee), feeCeil(grossAmount, 50));
+  });
+
   it("keeps the 500 USDC per-user gross deposit cap", async () => {
     const basket = await createBasket(bytes32());
     await deposit({
@@ -821,6 +919,106 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     );
     assert.isTrue(receipt.user.equals(protocolTreasury));
     assert.equal(receipt.userValueOut.toString(), expectedProtocolShares.toString());
+  });
+
+  it("bounds protocol-share execution and blocks it while paused", async () => {
+    const basket = await createBasket(bytes32());
+    await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    await warpSeconds(MANAGEMENT_PERIOD_SECS);
+    await program.methods
+      .accrueManagementFee()
+      .accountsStrict({ config, basket })
+      .rpc();
+
+    const before = await program.account.basket.fetch(basket);
+    const shareAmount = asNumber(before.protocolFeeShares);
+    const basketNavValue = asNumber(before.totalSharesOutstanding);
+    const minimumGross = minimumAfterSlippage(shareAmount, 1_000);
+
+    await program.methods
+      .setPaused(true)
+      .accountsStrict({ config, admin: admin.publicKey })
+      .signers([admin])
+      .rpc();
+    let pausedAttempt: Awaited<ReturnType<typeof withdrawProtocolFees>>;
+    try {
+      pausedAttempt = await withdrawProtocolFees({
+        basket,
+        shareAmount,
+        basketNavValue,
+        sharePrice: ONE_USDC,
+        grossRealizedValue: shareAmount,
+        expectedError: /Paused/,
+      });
+    } finally {
+      await program.methods
+        .setPaused(false)
+        .accountsStrict({ config, admin: admin.publicKey })
+        .signers([admin])
+        .rpc();
+    }
+
+    const afterPause = await program.account.basket.fetch(basket);
+    const pausedReceipt = await program.account.settlementReceipt
+      .fetch(pausedAttempt.receipt)
+      .catch(() => null);
+    assert.equal(
+      afterPause.totalSharesOutstanding.toString(),
+      before.totalSharesOutstanding.toString(),
+    );
+    assert.equal(
+      afterPause.protocolFeeShares.toString(),
+      before.protocolFeeShares.toString(),
+    );
+    assert.equal(
+      afterPause.lastSettlementNonce.toString(),
+      before.lastSettlementNonce.toString(),
+    );
+    assert.isNull(pausedReceipt);
+
+    const belowAttempt = await withdrawProtocolFees({
+      basket,
+      shareAmount,
+      basketNavValue,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: minimumGross - 1,
+      expectedError: /SlippageExceeded/,
+    });
+    const afterBelow = await program.account.basket.fetch(basket);
+    const belowReceipt = await program.account.settlementReceipt
+      .fetch(belowAttempt.receipt)
+      .catch(() => null);
+    assert.equal(
+      afterBelow.totalSharesOutstanding.toString(),
+      before.totalSharesOutstanding.toString(),
+    );
+    assert.equal(
+      afterBelow.protocolFeeShares.toString(),
+      before.protocolFeeShares.toString(),
+    );
+    assert.isNull(belowReceipt);
+
+    const completed = await withdrawProtocolFees({
+      basket,
+      shareAmount,
+      basketNavValue,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: minimumGross,
+    });
+    const after = await program.account.basket.fetch(basket);
+    const receipt = await program.account.settlementReceipt.fetch(completed.receipt);
+    assert.equal(asNumber(after.protocolFeeShares), 0);
+    assert.equal(
+      after.totalSharesOutstanding.toString(),
+      (BigInt(basketNavValue) - BigInt(shareAmount)).toString(),
+    );
+    assert.equal(asNumber(receipt.grossValue), minimumGross);
+    assert.equal(asNumber(receipt.userValueOut), minimumGross);
   });
 
   it("accrues a 45-day interval exactly before pricing a new deposit", async () => {
@@ -942,6 +1140,99 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       sharePrice: ONE_USDC,
       expectedError: /InvalidBasketStatus/,
     });
+  });
+
+  it("uses actual withdrawal proceeds and enforces both protocol and user minimums", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    const quotedGross = entry.sharesCredited;
+    const minimumGross = minimumAfterSlippage(quotedGross, 1_000);
+    const belowMinimum = minimumGross - 1;
+    const belowFee = feeCeil(belowMinimum, 200);
+
+    await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: quotedGross,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: belowMinimum,
+      protocolFee: belowFee,
+      creatorFee: 0,
+      userValueOut: belowMinimum - belowFee,
+      minValueOut: 0,
+      expectedError: /SlippageExceeded/,
+    });
+
+    const protocolFee = feeCeil(minimumGross, 200);
+    const userValueOut = minimumGross - protocolFee;
+    await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: quotedGross,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: minimumGross,
+      protocolFee,
+      creatorFee: 0,
+      userValueOut,
+      minValueOut: userValueOut + 1,
+      expectedError: /SlippageExceeded/,
+    });
+
+    const before = await program.account.position.fetch(entry.position);
+    assert.equal(asNumber(before.sharesOwned), entry.sharesCredited);
+    assert.equal(asNumber(before.costBasisValue), entry.netDepositValue);
+
+    const exit = await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: quotedGross,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: minimumGross,
+      protocolFee,
+      creatorFee: 0,
+      userValueOut,
+    });
+    const receipt = await program.account.settlementReceipt.fetch(exit.receipt);
+    assert.equal(asNumber(receipt.grossValue), minimumGross);
+    assert.equal(asNumber(receipt.protocolFee), protocolFee);
+    assert.equal(asNumber(receipt.creatorFee), 0);
+    assert.equal(asNumber(receipt.realizedProfit), 0);
+    assert.equal(asNumber(receipt.userValueOut), userValueOut);
+  });
+
+  it("passes positive withdrawal execution improvement through to the user", async () => {
+    const basket = await createBasket(bytes32());
+    const entry = await deposit({
+      basket,
+      grossAmount: 100 * ONE_USDC,
+      basketNavValue: 0,
+      sharePrice: ONE_USDC,
+    });
+    const actualGross = 110 * ONE_USDC;
+    const creatorFee = feeFloor(actualGross - entry.netDepositValue, 1_000);
+    const protocolFee = feeCeil(actualGross, 200);
+    const userValueOut = actualGross - creatorFee - protocolFee;
+    const exit = await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: entry.sharesCredited,
+      sharePrice: ONE_USDC,
+      grossRealizedValue: actualGross,
+      protocolFee,
+      creatorFee,
+      userValueOut,
+    });
+
+    const receipt = await program.account.settlementReceipt.fetch(exit.receipt);
+    assert.equal(asNumber(receipt.grossValue), actualGross);
+    assert.equal(asNumber(receipt.creatorFee), creatorFee);
+    assert.equal(asNumber(receipt.protocolFee), protocolFee);
+    assert.equal(asNumber(receipt.userValueOut), userValueOut);
   });
 
   it("crystallizes performance fees only on redeemed shares and preserves remaining HWM basis", async () => {
@@ -1084,6 +1375,25 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     const finalSharePrice = Math.floor(
       (finalNavValue * ONE_USDC) / entry.sharesCredited,
     );
+    const mismatchedGross = finalNavValue - 1;
+    const mismatchedCreatorFee = feeFloor(
+      mismatchedGross - entry.netDepositValue,
+      1_000,
+    );
+    const mismatchedProtocolFee = feeCeil(mismatchedGross, 100);
+    await withdraw({
+      basket,
+      shareAmount: entry.sharesCredited,
+      basketNavValue: finalNavValue,
+      sharePrice: finalSharePrice,
+      grossRealizedValue: mismatchedGross,
+      protocolFee: mismatchedProtocolFee,
+      creatorFee: mismatchedCreatorFee,
+      userValueOut:
+        mismatchedGross - mismatchedCreatorFee - mismatchedProtocolFee,
+      minValueOut: 0,
+      expectedError: /InvalidSettlementValues/,
+    });
     const exit = await withdraw({
       basket,
       shareAmount: entry.sharesCredited,

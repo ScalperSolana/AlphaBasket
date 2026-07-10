@@ -21,7 +21,7 @@ use crate::instructions::create_basket::{
 };
 use crate::math::{
     cost_basis_for_shares, fee_ceil, fee_floor, management_fee_shares_for_elapsed,
-    share_price_from_nav, shares_for_value, value_for_shares,
+    minimum_after_slippage, share_price_from_nav, shares_for_value, value_for_shares,
 };
 use crate::state::{
     Basket, BasketStatus, CompleteDepositArgs, CompleteProtocolFeeWithdrawalArgs,
@@ -352,9 +352,14 @@ pub fn complete_deposit_handler(
         .gross_amount
         .checked_sub(args.protocol_fee)
         .ok_or(EscrowError::MathOverflow)?;
+    let minimum_net = minimum_after_slippage(expected_net, ctx.accounts.config.max_slippage_bps)?;
     require!(
-        args.net_deposit_value == expected_net,
+        args.net_deposit_value <= expected_net,
         EscrowError::InvalidSettlementValues
+    );
+    require!(
+        args.net_deposit_value >= minimum_net,
+        EscrowError::SlippageExceeded
     );
     let expected_shares = shares_for_value(args.net_deposit_value, args.share_price)?;
     require!(
@@ -433,7 +438,7 @@ pub fn complete_deposit_handler(
         &args.nav_report_hash,
         args.shares_credited,
         args.share_price,
-        args.gross_amount,
+        args.net_deposit_value,
         args.protocol_fee,
         0,
         0,
@@ -533,8 +538,12 @@ pub fn complete_withdrawal_handler(
             );
             let expected_gross = value_for_shares(args.share_amount, args.share_price)?;
             require!(
-                args.gross_realized_value == expected_gross,
-                EscrowError::InvalidSettlementValues
+                args.gross_realized_value
+                    >= minimum_after_slippage(
+                        expected_gross,
+                        ctx.accounts.config.max_slippage_bps,
+                    )?,
+                EscrowError::SlippageExceeded
             );
         }
         WithdrawalKind::Final => {
@@ -690,6 +699,7 @@ pub fn complete_protocol_fee_withdrawal_handler(
     args: CompleteProtocolFeeWithdrawalArgs,
 ) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
+    require!(!ctx.accounts.config.paused, EscrowError::Paused);
     require!(args.share_amount > 0, EscrowError::ZeroAmount);
     require!(args.nav_report_hash != [0u8; 32], EscrowError::ZeroHash);
     validate_execution_batch(
@@ -752,8 +762,12 @@ pub fn complete_protocol_fee_withdrawal_handler(
             );
             let expected_gross = value_for_shares(args.share_amount, args.share_price)?;
             require!(
-                args.gross_realized_value == expected_gross,
-                EscrowError::InvalidSettlementValues
+                args.gross_realized_value
+                    >= minimum_after_slippage(
+                        expected_gross,
+                        ctx.accounts.config.max_slippage_bps,
+                    )?,
+                EscrowError::SlippageExceeded
             );
         }
     }

@@ -131,6 +131,7 @@ pub struct SettlementReceipt {
     pub nav_report_hash: [u8; 32],
     pub share_delta: u64,
     pub share_price: u64,
+    /// Actual value credited for a deposit or realized for a withdrawal.
     pub gross_value: u64,
     pub protocol_fee: u64,
     pub creator_fee: u64,
@@ -170,7 +171,9 @@ pub struct CreateBasketArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-/// User intent and backend result used to complete a deposit.
+/// User intent and backend result used to complete a deposit. The gross amount
+/// and minimum shares are user-authorized; `net_deposit_value` is the actual
+/// value credited by external execution and backs the minted shares.
 pub struct CompleteDepositArgs {
     pub user: Pubkey,
     pub intent_nonce: u64,
@@ -192,7 +195,9 @@ pub struct CompleteDepositArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-/// User intent and backend result used to complete a withdrawal.
+/// User intent and backend result used to complete a withdrawal. The share
+/// amount and minimum value are user-authorized; `gross_realized_value` is the
+/// actual external execution value used for fee and proceeds accounting.
 pub struct CompleteWithdrawalArgs {
     pub user: Pubkey,
     pub intent_nonce: u64,
@@ -216,7 +221,8 @@ pub struct CompleteWithdrawalArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-/// Backend result used to redeem protocol-owned dilution shares.
+/// Backend result used to redeem protocol-owned dilution shares. The gross
+/// realized value is the actual external execution value.
 pub struct CompleteProtocolFeeWithdrawalArgs {
     pub execution_version: u8,
     pub execution_batch_hash: [u8; 32],
