@@ -1,0 +1,36 @@
+{
+  "name": "@alphabasket/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/**/*.test.js",
+    "check": "npm run typecheck && npm test",
+    "migrate": "npm run build && node dist/src/apps/migrate.js",
+    "idl:check": "node scripts/check-idl.mjs",
+    "idl:sync": "node scripts/sync-idl.mjs"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.95.4",
+    "@temporalio/client": "^1.11.8",
+    "@temporalio/worker": "^1.11.8",
+    "pg": "^8.16.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "@types/pg": "^8.15.5",
+    "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "jayson": {
+      "uuid": "11.1.1"
+    }
+  }
+}

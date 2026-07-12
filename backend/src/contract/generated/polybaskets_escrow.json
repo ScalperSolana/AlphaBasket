@@ -1,0 +1,3081 @@
+{
+  "address": "5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm",
+  "metadata": {
+    "name": "polybaskets_escrow",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "AlphaBasket v2 internal-share accounting and backend-authorized settlement program"
+  },
+  "instructions": [
+    {
+      "name": "accept_admin",
+      "docs": [
+        "Accepts administrator authority as the proposed key."
+      ],
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending_admin",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "accrue_management_fee",
+      "docs": [
+        "Permissionless crank; dilution is proportional to exact elapsed seconds."
+      ],
+      "discriminator": [
+        91,
+        57,
+        239,
+        81,
+        27,
+        216,
+        220,
+        148
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "begin_reconstitution",
+      "docs": [
+        "Moves an eligible perpetual basket into reconstitution."
+      ],
+      "discriminator": [
+        41,
+        110,
+        60,
+        3,
+        88,
+        106,
+        37,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "begin_resolution",
+      "docs": [
+        "Stops deposits and starts resolution for a non-perpetual basket."
+      ],
+      "discriminator": [
+        227,
+        106,
+        197,
+        41,
+        160,
+        120,
+        124,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_admin_transfer",
+      "docs": [
+        "Cancels a pending administrator transfer."
+      ],
+      "discriminator": [
+        38,
+        131,
+        157,
+        31,
+        240,
+        137,
+        44,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "complete_deposit",
+      "docs": [
+        "Completes a user-signed deposit after external Polymarket execution."
+      ],
+      "discriminator": [
+        169,
+        140,
+        35,
+        214,
+        236,
+        133,
+        191,
+        32
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket"
+              },
+              {
+                "kind": "arg",
+                "path": "args.user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "receipt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_batch_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CompleteDepositArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "complete_protocol_fee_withdrawal",
+      "docs": [
+        "Redeems accrued protocol dilution shares after external execution."
+      ],
+      "discriminator": [
+        35,
+        40,
+        178,
+        226,
+        74,
+        194,
+        175,
+        239
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "receipt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_batch_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CompleteProtocolFeeWithdrawalArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "complete_reconstitution",
+      "docs": [
+        "Applies a new Composer-signed canonical composition."
+      ],
+      "discriminator": [
+        236,
+        210,
+        113,
+        243,
+        154,
+        142,
+        102,
+        131
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "composer_signer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "ReconstitutionArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "complete_withdrawal",
+      "docs": [
+        "Completes both an active early exit and a final redemption."
+      ],
+      "discriminator": [
+        107,
+        98,
+        134,
+        131,
+        74,
+        120,
+        174,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket"
+              },
+              {
+                "kind": "arg",
+                "path": "args.user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "receipt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_batch_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CompleteWithdrawalArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_basket",
+      "docs": [
+        "Only the configured Composer Service key can create a basket."
+      ],
+      "discriminator": [
+        47,
+        105,
+        155,
+        148,
+        15,
+        169,
+        202,
+        211
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.basket_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composer_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CreateBasketArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "docs": [
+        "Initializes the singleton configuration under the program upgrade authority."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program",
+          "address": "5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "InitializeArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "propose_admin",
+      "docs": [
+        "Starts the two-step administrator transfer."
+      ],
+      "discriminator": [
+        121,
+        214,
+        199,
+        212,
+        87,
+        39,
+        117,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "record_final_settlement",
+      "docs": [
+        "Records the final NAV and share snapshot for deterministic redemptions."
+      ],
+      "discriminator": [
+        51,
+        17,
+        237,
+        74,
+        237,
+        233,
+        185,
+        80
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "Basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backend_signer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "FinalSettlementArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_authorities",
+      "docs": [
+        "Rotates operational signer and treasury authorities."
+      ],
+      "discriminator": [
+        124,
+        254,
+        44,
+        240,
+        197,
+        70,
+        190,
+        107
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_composer_signer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "new_backend_signer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "new_protocol_treasury",
+          "type": {
+            "option": "pubkey"
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_limits",
+      "docs": [
+        "Updates the global user slippage bound."
+      ],
+      "discriminator": [
+        207,
+        50,
+        250,
+        67,
+        211,
+        33,
+        70,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "max_slippage_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "set_paused",
+      "docs": [
+        "Pauses or resumes user and execution completion flows."
+      ],
+      "discriminator": [
+        91,
+        60,
+        125,
+        192,
+        176,
+        225,
+        166,
+        218
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Basket",
+      "discriminator": [
+        219,
+        79,
+        107,
+        135,
+        231,
+        243,
+        218,
+        248
+      ]
+    },
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "Position",
+      "discriminator": [
+        170,
+        188,
+        143,
+        228,
+        122,
+        64,
+        247,
+        208
+      ]
+    },
+    {
+      "name": "SettlementReceipt",
+      "discriminator": [
+        52,
+        249,
+        252,
+        121,
+        4,
+        232,
+        187,
+        4
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AdminTransferAccepted",
+      "discriminator": [
+        79,
+        229,
+        204,
+        202,
+        134,
+        43,
+        177,
+        26
+      ]
+    },
+    {
+      "name": "AdminTransferCancelled",
+      "discriminator": [
+        93,
+        23,
+        69,
+        55,
+        216,
+        128,
+        106,
+        56
+      ]
+    },
+    {
+      "name": "AdminTransferProposed",
+      "discriminator": [
+        203,
+        168,
+        175,
+        51,
+        239,
+        104,
+        20,
+        85
+      ]
+    },
+    {
+      "name": "AuthoritiesUpdated",
+      "discriminator": [
+        67,
+        41,
+        36,
+        180,
+        223,
+        84,
+        221,
+        76
+      ]
+    },
+    {
+      "name": "BasketCreated",
+      "discriminator": [
+        26,
+        146,
+        108,
+        155,
+        189,
+        85,
+        8,
+        7
+      ]
+    },
+    {
+      "name": "BasketReconstituted",
+      "discriminator": [
+        16,
+        150,
+        225,
+        12,
+        4,
+        22,
+        95,
+        171
+      ]
+    },
+    {
+      "name": "BasketStatusUpdated",
+      "discriminator": [
+        137,
+        129,
+        70,
+        236,
+        181,
+        71,
+        100,
+        217
+      ]
+    },
+    {
+      "name": "ConfigInitialized",
+      "discriminator": [
+        181,
+        49,
+        200,
+        156,
+        19,
+        167,
+        178,
+        91
+      ]
+    },
+    {
+      "name": "DepositSettled",
+      "discriminator": [
+        154,
+        83,
+        222,
+        39,
+        153,
+        147,
+        84,
+        58
+      ]
+    },
+    {
+      "name": "FinalSettlementRecorded",
+      "discriminator": [
+        239,
+        132,
+        242,
+        188,
+        76,
+        223,
+        224,
+        51
+      ]
+    },
+    {
+      "name": "LimitsUpdated",
+      "discriminator": [
+        160,
+        131,
+        108,
+        76,
+        91,
+        80,
+        118,
+        137
+      ]
+    },
+    {
+      "name": "ManagementFeeAccrued",
+      "discriminator": [
+        58,
+        154,
+        130,
+        86,
+        156,
+        79,
+        206,
+        166
+      ]
+    },
+    {
+      "name": "PauseUpdated",
+      "discriminator": [
+        203,
+        203,
+        33,
+        225,
+        130,
+        103,
+        90,
+        105
+      ]
+    },
+    {
+      "name": "ProtocolFeeSharesWithdrawn",
+      "discriminator": [
+        68,
+        102,
+        204,
+        195,
+        221,
+        210,
+        142,
+        244
+      ]
+    },
+    {
+      "name": "WithdrawalSettled",
+      "discriminator": [
+        7,
+        150,
+        114,
+        152,
+        192,
+        118,
+        224,
+        19
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Paused",
+      "msg": "Program is paused"
+    },
+    {
+      "code": 6001,
+      "name": "Unauthorized",
+      "msg": "Authority is not allowed to perform this action"
+    },
+    {
+      "code": 6002,
+      "name": "AdminTransferNotPending",
+      "msg": "No matching admin transfer is pending"
+    },
+    {
+      "code": 6003,
+      "name": "ZeroAuthority",
+      "msg": "Configured authority cannot be the zero public key"
+    },
+    {
+      "code": 6004,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6005,
+      "name": "ZeroHash",
+      "msg": "Hash value cannot be all zeroes"
+    },
+    {
+      "code": 6006,
+      "name": "MissingCompositionSignature",
+      "msg": "Composer signature instruction is missing"
+    },
+    {
+      "code": 6007,
+      "name": "MalformedCompositionSignature",
+      "msg": "Composer signature instruction is malformed"
+    },
+    {
+      "code": 6008,
+      "name": "UnauthorizedCompositionSigner",
+      "msg": "Composition was signed by an unauthorized key"
+    },
+    {
+      "code": 6009,
+      "name": "CompositionSignatureMismatch",
+      "msg": "Signed composition payload does not match the instruction"
+    },
+    {
+      "code": 6010,
+      "name": "CompositionHashMismatch",
+      "msg": "Composition hash does not match the canonical basket items"
+    },
+    {
+      "code": 6011,
+      "name": "CompositionAuthorizationExpired",
+      "msg": "Composition authorization has expired"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidBasisPoints",
+      "msg": "Fee or slippage basis points are outside configured bounds"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidBasketItems",
+      "msg": "Basket items are missing, duplicated, too many, or malformed"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidBasketWeights",
+      "msg": "Basket item weights must sum to 10000 bps"
+    },
+    {
+      "code": 6015,
+      "name": "MarketWeightExceeded",
+      "msg": "A basket item exceeds the per-market weight cap"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidBasketStatus",
+      "msg": "Basket status does not allow this action"
+    },
+    {
+      "code": 6017,
+      "name": "BasketNotPerpetual",
+      "msg": "Only perpetual baskets can be reconstituted"
+    },
+    {
+      "code": 6018,
+      "name": "MissingIntentSignature",
+      "msg": "User intent signature instruction is missing"
+    },
+    {
+      "code": 6019,
+      "name": "MalformedIntentSignature",
+      "msg": "User intent signature instruction is malformed"
+    },
+    {
+      "code": 6020,
+      "name": "UnauthorizedIntentSigner",
+      "msg": "Intent signature was produced by the wrong user"
+    },
+    {
+      "code": 6021,
+      "name": "IntentSignatureMismatch",
+      "msg": "Signed user intent does not match the completion"
+    },
+    {
+      "code": 6022,
+      "name": "IntentExpired",
+      "msg": "User intent has expired"
+    },
+    {
+      "code": 6023,
+      "name": "IntentNonceMismatch",
+      "msg": "User intent nonce must be exactly the next position nonce"
+    },
+    {
+      "code": 6024,
+      "name": "PositionMismatch",
+      "msg": "Position belongs to a different basket or user"
+    },
+    {
+      "code": 6025,
+      "name": "BasketDepositLimitExceeded",
+      "msg": "This deposit would exceed the 10,000 USDC basket cap"
+    },
+    {
+      "code": 6026,
+      "name": "UserDepositLimitExceeded",
+      "msg": "This deposit would exceed the 500 USDC per-user basket cap"
+    },
+    {
+      "code": 6027,
+      "name": "InsufficientShares",
+      "msg": "Insufficient shares"
+    },
+    {
+      "code": 6028,
+      "name": "SharePriceAlreadyInitialized",
+      "msg": "The initial $1 share price has already been consumed"
+    },
+    {
+      "code": 6029,
+      "name": "CompositionVersionMismatch",
+      "msg": "Completion uses a stale composition version"
+    },
+    {
+      "code": 6030,
+      "name": "FeeMismatch",
+      "msg": "Protocol fee does not match basket rules"
+    },
+    {
+      "code": 6031,
+      "name": "SlippageExceeded",
+      "msg": "Settlement result exceeds the protocol or user slippage limit"
+    },
+    {
+      "code": 6032,
+      "name": "InvalidMinimumOutput",
+      "msg": "Minimum output does not enforce the requested slippage tolerance"
+    },
+    {
+      "code": 6033,
+      "name": "InvalidSettlementValues",
+      "msg": "Settlement values are internally inconsistent"
+    },
+    {
+      "code": 6034,
+      "name": "ShareArithmeticMismatch",
+      "msg": "Credited shares do not match net value and share price"
+    },
+    {
+      "code": 6035,
+      "name": "SharePriceMismatch",
+      "msg": "Share price does not match the supplied basket NAV and outstanding shares"
+    },
+    {
+      "code": 6036,
+      "name": "SettlementNonceNotIncreasing",
+      "msg": "Settlement nonce must increase for every basket completion"
+    },
+    {
+      "code": 6037,
+      "name": "CompositionNonceNotIncreasing",
+      "msg": "Composition nonce must increase for every basket composition"
+    },
+    {
+      "code": 6038,
+      "name": "FinalSnapshotMismatch",
+      "msg": "Final settlement snapshot does not match outstanding shares"
+    },
+    {
+      "code": 6039,
+      "name": "CreatorFeeMismatch",
+      "msg": "Creator performance fee does not match realized profit"
+    },
+    {
+      "code": 6040,
+      "name": "ManagementFeeCatchUpTooLarge",
+      "msg": "Management-fee catch-up exceeds the supported safety bound"
+    },
+    {
+      "code": 6041,
+      "name": "InvalidExecutionVersion",
+      "msg": "Execution batch uses an unsupported encoding version"
+    },
+    {
+      "code": 6042,
+      "name": "InvalidExecutionTimestamp",
+      "msg": "Execution timestamp must be a valid past or current Unix timestamp"
+    },
+    {
+      "code": 6043,
+      "name": "InsufficientProtocolFeeShares",
+      "msg": "Requested protocol fee shares exceed the accrued balance"
+    },
+    {
+      "code": 6044,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow or underflow"
+    }
+  ],
+  "types": [
+    {
+      "name": "AdminTransferAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "cancelled_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthoritiesUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "composer_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "backend_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_treasury",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Basket",
+      "docs": [
+        "Basket composition, lifecycle, and aggregate share accounting."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator_fee_destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_fee_destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "BasketStatus"
+              }
+            }
+          },
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "composition_version",
+            "type": "u32"
+          },
+          {
+            "name": "last_composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "performance_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "is_perpetual",
+            "type": "bool"
+          },
+          {
+            "name": "reconstitution_cadence_secs",
+            "type": "i64"
+          },
+          {
+            "name": "total_shares_outstanding",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee_shares",
+            "type": "u64"
+          },
+          {
+            "name": "last_management_fee_at",
+            "type": "i64"
+          },
+          {
+            "name": "management_fee_accrual_remainder",
+            "type": "u128"
+          },
+          {
+            "name": "has_initialized_share_price",
+            "type": "bool"
+          },
+          {
+            "name": "last_settlement_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "gross_deposited_value",
+            "type": "u64"
+          },
+          {
+            "name": "final_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "final_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "final_share_snapshot",
+            "type": "u64"
+          },
+          {
+            "name": "final_shares_consumed",
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "last_reconstitution_at",
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "BasketAsset"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BasketAsset",
+      "docs": [
+        "One weighted asset in a Composer-signed basket composition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market_id",
+            "type": "string"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "PositionKind"
+              }
+            }
+          },
+          {
+            "name": "weight_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BasketCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "performance_fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BasketReconstituted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "composition_version",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BasketStatus",
+      "docs": [
+        "Lifecycle states for a basket."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Reconstituting"
+          },
+          {
+            "name": "Resolving"
+          },
+          {
+            "name": "Redeemable"
+          },
+          {
+            "name": "Closed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BasketStatusUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "BasketStatus"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CompleteDepositArgs",
+      "docs": [
+        "User intent and backend result used to complete a deposit. The gross amount",
+        "and minimum shares are user-authorized; `net_deposit_value` is the actual",
+        "value credited by external execution and backs the minted shares."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "intent_expiry",
+            "type": "i64"
+          },
+          {
+            "name": "expected_composition_version",
+            "type": "u32"
+          },
+          {
+            "name": "gross_amount",
+            "type": "u64"
+          },
+          {
+            "name": "min_shares_out",
+            "type": "u64"
+          },
+          {
+            "name": "quote_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "execution_version",
+            "type": "u8"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "nav_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "settlement_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "basket_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "share_price",
+            "type": "u64"
+          },
+          {
+            "name": "net_deposit_value",
+            "type": "u64"
+          },
+          {
+            "name": "shares_credited",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CompleteProtocolFeeWithdrawalArgs",
+      "docs": [
+        "Backend result used to redeem protocol-owned dilution shares. The gross",
+        "realized value is the actual external execution value."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "execution_version",
+            "type": "u8"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "nav_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "settlement_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "share_amount",
+            "type": "u64"
+          },
+          {
+            "name": "basket_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "share_price",
+            "type": "u64"
+          },
+          {
+            "name": "gross_realized_value",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CompleteWithdrawalArgs",
+      "docs": [
+        "User intent and backend result used to complete a withdrawal. The share",
+        "amount and minimum value are user-authorized; `gross_realized_value` is the",
+        "actual external execution value used for fee and proceeds accounting."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "intent_expiry",
+            "type": "i64"
+          },
+          {
+            "name": "expected_composition_version",
+            "type": "u32"
+          },
+          {
+            "name": "share_amount",
+            "type": "u64"
+          },
+          {
+            "name": "min_value_out",
+            "type": "u64"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "execution_version",
+            "type": "u8"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "nav_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "settlement_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "basket_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "share_price",
+            "type": "u64"
+          },
+          {
+            "name": "gross_realized_value",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          },
+          {
+            "name": "creator_fee",
+            "type": "u64"
+          },
+          {
+            "name": "user_value_out",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": [
+        "Singleton protocol configuration and authority registry."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "composer_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "backend_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_slippage_bps",
+            "type": "u16"
+          },
+          {
+            "name": "accounting_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "composer_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "backend_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_treasury",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateBasketArgs",
+      "docs": [
+        "Composer-authorized basket creation parameters."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "BasketAsset"
+                }
+              }
+            }
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator_fee_destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "performance_fee_bps",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "is_perpetual",
+            "type": "bool"
+          },
+          {
+            "name": "reconstitution_cadence_secs",
+            "type": "i64"
+          },
+          {
+            "name": "composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composition_expiry",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DepositSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "receipt",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "net_invested_value",
+            "type": "u64"
+          },
+          {
+            "name": "shares_credited",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FinalSettlementArgs",
+      "docs": [
+        "Final basket NAV and share-supply snapshot."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "final_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "final_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "final_share_snapshot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FinalSettlementRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "final_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "final_nav_value",
+            "type": "u64"
+          },
+          {
+            "name": "final_share_snapshot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeArgs",
+      "docs": [
+        "Initialization parameters for operational authorities and accounting policy."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "composer_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "backend_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "settlement_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_slippage_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LimitsUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "max_slippage_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ManagementFeeAccrued",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "periods",
+            "type": "u64"
+          },
+          {
+            "name": "elapsed_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "shares_minted",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee_shares",
+            "type": "u64"
+          },
+          {
+            "name": "total_shares_outstanding",
+            "type": "u64"
+          },
+          {
+            "name": "accrued_through",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Position",
+      "docs": [
+        "A user's shares, performance-fee basis, and weighted holding timestamp.",
+        "`cost_basis_value` is the aggregate HWM/equalization basis of the remaining",
+        "shares. Partial redemptions remove only their proportional basis; they do",
+        "not raise the per-share basis of unredeemed shares unless those shares also",
+        "crystallize a performance fee."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares_owned",
+            "type": "u64"
+          },
+          {
+            "name": "cost_basis_value",
+            "type": "u64"
+          },
+          {
+            "name": "gross_deposited_value",
+            "type": "u64"
+          },
+          {
+            "name": "last_intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "weighted_deposit_timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PositionKind",
+      "docs": [
+        "Tagged representation of a supported basket position."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "PredictionMarket",
+            "fields": [
+              {
+                "name": "outcome",
+                "type": "u8"
+              },
+              {
+                "name": "ctf_token_id",
+                "type": {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolFeeSharesWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "shares_redeemed",
+            "type": "u64"
+          },
+          {
+            "name": "gross_value",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReconstitutionArgs",
+      "docs": [
+        "Composer-authorized replacement composition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "BasketAsset"
+                }
+              }
+            }
+          },
+          {
+            "name": "composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composition_expiry",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettlementAction",
+      "docs": [
+        "Settlement receipt operation type."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Deposit"
+          },
+          {
+            "name": "UserWithdrawal"
+          },
+          {
+            "name": "ProtocolFeeWithdrawal"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettlementReceipt",
+      "docs": [
+        "Immutable replay-protected record of a completed accounting settlement."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "action",
+            "type": {
+              "defined": {
+                "name": "SettlementAction"
+              }
+            }
+          },
+          {
+            "name": "execution_version",
+            "docs": [
+              "Version of the canonical external-execution batch encoding."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "execution_batch_hash",
+            "docs": [
+              "Hash of all fill markets, outcomes, amounts, prices, and external references."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "docs": [
+              "Timestamp at which the external execution batch completed."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "nav_report_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "share_delta",
+            "type": "u64"
+          },
+          {
+            "name": "share_price",
+            "type": "u64"
+          },
+          {
+            "name": "gross_value",
+            "docs": [
+              "Actual value credited for a deposit or realized for a withdrawal."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          },
+          {
+            "name": "creator_fee",
+            "type": "u64"
+          },
+          {
+            "name": "withdrawn_cost_basis",
+            "type": "u64"
+          },
+          {
+            "name": "realized_profit",
+            "type": "u64"
+          },
+          {
+            "name": "early_exit_value",
+            "type": "u64"
+          },
+          {
+            "name": "mature_exit_value",
+            "type": "u64"
+          },
+          {
+            "name": "user_value_out",
+            "type": "u64"
+          },
+          {
+            "name": "settlement_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "settled_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawalKind",
+      "docs": [
+        "Whether a redemption occurs while active or against a final snapshot."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Final"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawalSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "intent_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "receipt",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "execution_batch_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": "i64"
+          },
+          {
+            "name": "shares_decremented",
+            "type": "u64"
+          },
+          {
+            "name": "user_value_out",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee",
+            "type": "u64"
+          },
+          {
+            "name": "creator_fee",
+            "type": "u64"
+          },
+          {
+            "name": "withdrawn_cost_basis",
+            "type": "u64"
+          },
+          {
+            "name": "realized_profit",
+            "type": "u64"
+          },
+          {
+            "name": "early_exit_value",
+            "type": "u64"
+          },
+          {
+            "name": "mature_exit_value",
+            "type": "u64"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "WithdrawalKind"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -8,8 +8,10 @@
     "dev:ai": "npm --prefix ai-server run dev",
     "mcp:ai": "npm --prefix ai-server run mcp",
     "build": "vite build",
+    "build:backend": "npm --prefix backend run build",
     "build:ai": "npm --prefix ai-server run build",
     "test:ai": "npm --prefix ai-server test",
+    "test:backend": "npm --prefix backend test",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview"
