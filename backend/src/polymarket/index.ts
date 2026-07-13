@@ -1,4 +1,6 @@
+export * from "./bridge-rest.js";
 export * from "./clob-rest.js";
+export * from "./fak-rest.js";
 export * from "./fixed-point.js";
 export * from "./gamma-rest.js";
 export * from "./http-json.js";

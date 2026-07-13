@@ -83,4 +83,56 @@ export class JsonHttpClient {
       clearTimeout(timeout);
     }
   }
+
+  public async post<Schema extends z.ZodTypeAny>(
+    url: string,
+    body: unknown,
+    schema: Schema,
+    headers: Readonly<Record<string, string>> = {},
+  ): Promise<z.output<Schema>> {
+    return this.request(url, {
+      method: "POST",
+      headers: Object.freeze({
+        accept: "application/json",
+        "content-type": "application/json",
+        ...headers,
+      }),
+      body: JSON.stringify(body),
+    }, schema);
+  }
+
+  private async request<Schema extends z.ZodTypeAny>(
+    url: string,
+    init: RequestInit,
+    schema: Schema,
+  ): Promise<z.output<Schema>> {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
+    try {
+      const response = await this.options.fetch(url, { ...init, signal: controller.signal });
+      const responseBody = await response.text();
+      if (!response.ok) throw new HttpStatusError(response.status, url, responseBody);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(responseBody) as unknown;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "malformed JSON";
+        throw new ResponseValidationError(url, reason);
+      }
+      const result = schema.safeParse(parsed);
+      if (!result.success) {
+        throw new ResponseValidationError(url, result.error.issues.map((issue) => issue.message).join("; "));
+      }
+      return result.data;
+    } catch (error) {
+      if (timedOut) throw new HttpTimeoutError(url, this.timeoutMs);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }

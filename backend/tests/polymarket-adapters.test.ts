@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  ClobFakRestExecution,
   ClobRestMarketData,
   GammaRestMarketData,
   JsonHttpClient,
+  PolymarketBridgeRest,
   calculateExecutableDepth,
 } from "../src/polymarket/index.js";
 
@@ -98,5 +100,72 @@ describe("Polymarket read adapters", () => {
       ).getOrderBook("10"),
       /aligned to tick/u,
     );
+  });
+});
+
+describe("Polymarket execution adapters", () => {
+  it("uses the documented bridge request shapes and preserves optional output amounts", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const http = new JsonHttpClient({
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        const payload = url.endsWith("/status/bridge-address-123")
+          ? { transactions: [{ fromAmountBaseUnit: "995000", toAmountBaseUnit: "994500", status: "COMPLETED", txHash: "destination-tx", createdTimeMs: "2000000000000" }] }
+          : { address: { evm: `0x${"11".repeat(20)}`, svm: "11111111111111111111111111111111" } };
+        return new Response(JSON.stringify(payload), { status: url.includes("/withdraw") ? 201 : 200 });
+      },
+    });
+    const bridge = new PolymarketBridgeRest(http, { builderCode: `0x${"22".repeat(32)}` });
+    await bridge.createDepositAddress(`0x${"33".repeat(20)}`);
+    await bridge.createWithdrawalAddress({
+      polymarketWallet: `0x${"44".repeat(20)}`,
+      solanaRecipient: "11111111111111111111111111111111",
+      solanaChainId: "1151111081099710",
+      solanaUsdcMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    });
+    const status = await bridge.getStatus("bridge-address-123");
+    assert.equal(status[0]?.inputAmountUnits, 995_000n);
+    assert.equal(status[0]?.outputAmountUnits, 994_500n);
+    assert.equal(requests[0]?.init.headers && (requests[0].init.headers as Record<string, string>)["X-Builder-Code"], `0x${"22".repeat(32)}`);
+    assert.match(String(requests[1]?.init.body), /1151111081099710/u);
+  });
+
+  it("submits FAK only and classifies a partial immediate fill", async () => {
+    let postedBody = "";
+    const adapter = new ClobFakRestExecution(
+      new JsonHttpClient({
+        fetch: async (_url, init) => {
+          postedBody = String(init.body);
+          return new Response(JSON.stringify({
+            success: true,
+            orderID: "order-1",
+            status: "matched",
+            makingAmount: "500000",
+            takingAmount: "1000000",
+            transactionsHashes: ["tx-1"],
+            tradeIDs: ["trade-1"],
+            errorMsg: "",
+          }), { status: 200 });
+        },
+      }),
+      {
+        signFakOrder: async (request) => ({
+          owner: "owner",
+          order: { tokenId: request.tokenId, makerAmount: request.makerAmountUnits.toString(10) },
+          authenticationHeaders: { POLY_API_KEY: "redacted-test-key" },
+        }),
+      },
+    );
+    const result = await adapter.executeFak({
+      clientOrderId: "client-1",
+      tokenId: "token-1",
+      side: "buy",
+      amountUnits: 1_000_000n,
+      worstPriceUnits: 500_000n,
+    });
+    assert.equal(result.status, "partially_filled");
+    assert.equal(result.averagePriceUnits, 500_000n);
+    assert.match(postedBody, /"orderType":"FAK"/u);
+    assert.match(postedBody, /"postOnly":false/u);
   });
 });
