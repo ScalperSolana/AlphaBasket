@@ -16,6 +16,8 @@ import type {
   SolanaBridgeReceiptPort,
 } from "../execution/types.js";
 import type { SignedWithdrawalIntent } from "../quotes/types.js";
+import type { FinancialExecutionGuardPort } from "../operations/index.js";
+import { NOOP_FAULT_INJECTOR, type FaultInjectorPort } from "../resilience/index.js";
 import {
   assertExecutionTimestamp,
   assertFreshSettlementPricing,
@@ -23,6 +25,11 @@ import {
   type SolanaSettlementGatewayPort,
 } from "../settlement/types.js";
 import { BridgePendingError } from "../deposits/deposit-workflow.js";
+import type { WalletExecutionCoordinatorPort } from "../wallets/types.js";
+
+const assertLeaseActive = (signal: AbortSignal): void => {
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("execution wallet lease was lost");
+};
 
 export interface WithdrawalWorkflowRequest {
   readonly operationId: string;
@@ -30,12 +37,19 @@ export interface WithdrawalWorkflowRequest {
   readonly workflowId: string;
   readonly intent: SignedWithdrawalIntent;
   readonly polymarketWallet: string;
+  readonly walletId: string;
   readonly totalSharesOutstanding: bigint;
   readonly positionSharesOwned: bigint;
   readonly positionCostBasisValue: bigint;
   readonly weightedDepositTimestamp: bigint;
   readonly idlePusdUnits: bigint;
-  readonly targets: readonly (WeightedExecutionTarget & { readonly currentUnits: bigint; readonly worstSellPriceUnits: bigint })[];
+  readonly targets: readonly (
+    WeightedExecutionTarget & {
+      readonly currentUnits: bigint;
+      readonly worstSellPriceUnits: bigint;
+      readonly negativeRisk: boolean;
+    }
+  )[];
   readonly performanceFeeBps: number;
   readonly maxSlippageBps: number;
   readonly creatorDestination: string;
@@ -44,6 +58,12 @@ export interface WithdrawalWorkflowRequest {
   readonly solanaUsdcMint: string;
   readonly solanaChainId: string;
   readonly settlementNonce: bigint;
+  /** Optional local/staging execution path; hybrid_devnet uses live_bridge. */
+  readonly capitalMode?: "prefunded_staging" | "live_bridge";
+  /** Runs under the same exclusive wallet lease immediately before external execution. */
+  readonly beforeExecution?: () => Promise<void>;
+  /** Exactly-once portfolio attribution hook, still under the wallet lease. */
+  readonly afterSettlement?: (result: WithdrawalWorkflowResult) => Promise<void>;
   readonly now: Date;
 }
 
@@ -70,9 +90,29 @@ export class WithdrawalWorkflow {
     private readonly splitter: SolanaAtomicSplitPort,
     private readonly pricing: SettlementPricingPort,
     private readonly settlement: SolanaSettlementGatewayPort,
+    private readonly executionGuard: FinancialExecutionGuardPort,
+    private readonly walletCoordinator: WalletExecutionCoordinatorPort,
+    private readonly faults: FaultInjectorPort = NOOP_FAULT_INJECTOR,
   ) {}
 
   public async execute(request: WithdrawalWorkflowRequest): Promise<WithdrawalWorkflowResult> {
+    return this.walletCoordinator.execute(request.walletId, request.operationId, async (signal) => {
+      assertLeaseActive(signal);
+      await this.executionGuard.authorize({
+        operationId: request.operationId,
+        basketId: request.intent.quote.basket.toBase58(),
+        walletId: request.walletId,
+        amountUnits: request.intent.quote.quotedGrossValue,
+        now: request.now,
+      });
+      await request.beforeExecution?.();
+      const result = await this.executeLocked(request, signal);
+      await request.afterSettlement?.(result);
+      return result;
+    });
+  }
+
+  private async executeLocked(request: WithdrawalWorkflowRequest, signal: AbortSignal): Promise<WithdrawalWorkflowResult> {
     const quote = request.intent.quote;
     const requestHash = executionRequestHash({
       kind: "withdrawal",
@@ -108,13 +148,20 @@ export class WithdrawalWorkflow {
       const allocation = allocations[index];
       const source = request.targets[index];
       if (allocation === undefined || source === undefined || allocation.amountUnits === 0n) continue;
-      orders.push(await this.fak.executeFak({
+      assertLeaseActive(signal);
+      const order = await this.fak.executeFak({
         clientOrderId: `${request.operationId}:sell:${index}`,
         tokenId: allocation.tokenId,
         side: "sell",
+        negativeRisk: source.negativeRisk,
         amountUnits: allocation.amountUnits,
         worstPriceUnits: source.worstSellPriceUnits,
-      }));
+      });
+      orders.push(order);
+      await this.faults.after("withdrawal.fak_order_executed", {
+        operationId: request.operationId,
+        metadata: { clientOrderId: order.clientOrderId, orderId: order.orderId },
+      });
     }
     const sellProceeds = orders.reduce((sum, order) => sum + order.filledOutputUnits, 0n);
     const idleAllocation = (request.idlePusdUnits * quote.shareAmount) / request.totalSharesOutstanding;
@@ -129,43 +176,97 @@ export class WithdrawalWorkflow {
         orderIds: orders.map((order) => order.orderId),
       }, request.now);
     }
-    const withdrawalAddress = await this.bridge.createWithdrawalAddress({
-      polymarketWallet: request.polymarketWallet,
-      solanaRecipient: request.solanaSettlementReceiver,
-      solanaChainId: request.solanaChainId,
-      solanaUsdcMint: request.solanaUsdcMint,
-    });
-    const transfer = await this.pusdTransfer.transferPusd({
-      idempotencyKey: `${request.operationId}:bridge-withdrawal`,
-      destinationEvmAddress: withdrawalAddress.evm,
-      amountUnits: grossPusd,
-    });
-    if (operation.state === "trading_completed") {
-      operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
-        ...operation.checkpoint,
-        bridgeAddress: withdrawalAddress.evm,
-        pusdTransferTransaction: transfer.transactionHash,
-      }, request.now);
+    let bridgeAddress: string;
+    let bridgeSourceTransaction: string;
+    let bridgeObservedAtMs: bigint;
+    let receipt: Readonly<{
+      amountUnits: bigint;
+      transactionSignature: string;
+      finalizedSlot: bigint;
+    }>;
+    if (request.capitalMode === "prefunded_staging") {
+      bridgeAddress = `prefunded:${request.operationId}`;
+      bridgeSourceTransaction = `prefunded-pusd:${request.operationId}`;
+      const storedObservedAtMs = operation.checkpoint.bridgeObservedAtMs;
+      bridgeObservedAtMs = typeof storedObservedAtMs === "string"
+        ? BigInt(storedObservedAtMs)
+        : BigInt(request.now.getTime());
+      if (operation.state === "trading_completed") {
+        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+          ...operation.checkpoint,
+          bridgeAddress,
+          pusdTransferTransaction: bridgeSourceTransaction,
+          bridgeObservedAtMs: bridgeObservedAtMs.toString(10),
+        }, request.now);
+      }
+      receipt = Object.freeze({
+        amountUnits: grossPusd,
+        transactionSignature: `prefunded-usdc:${request.operationId}`,
+        finalizedSlot: 0n,
+      });
+    } else {
+      if (operation.state === "trading_completed") {
+        assertLeaseActive(signal);
+        const withdrawalAddress = await this.bridge.createWithdrawalAddress({
+          polymarketWallet: request.polymarketWallet,
+          solanaRecipient: request.solanaSettlementReceiver,
+          solanaChainId: request.solanaChainId,
+          solanaUsdcMint: request.solanaUsdcMint,
+        });
+        bridgeAddress = withdrawalAddress.evm;
+        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+          ...operation.checkpoint,
+          bridgeAddress,
+        }, request.now);
+        await this.faults.after("withdrawal.bridge_address_created", {
+          operationId: request.operationId,
+          metadata: { bridgeAddress },
+        });
+      } else {
+        const stored = operation.checkpoint.bridgeAddress;
+        if (typeof stored !== "string" || stored.length === 0) throw new Error("withdrawal checkpoint is missing the bridge address");
+        bridgeAddress = stored;
+      }
+      assertLeaseActive(signal);
+      const transfer = await this.pusdTransfer.transferPusd({
+        idempotencyKey: `${request.operationId}:bridge-withdrawal`,
+        destinationEvmAddress: bridgeAddress,
+        amountUnits: grossPusd,
+      });
+      bridgeSourceTransaction = transfer.transactionHash;
+      await this.faults.after("withdrawal.pusd_transfer_submitted", {
+        operationId: request.operationId,
+        metadata: { transactionHash: transfer.transactionHash },
+      });
+      if (operation.state === "bridge_pending" && operation.checkpoint.pusdTransferTransaction === undefined) {
+        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+          ...operation.checkpoint,
+          pusdTransferTransaction: transfer.transactionHash,
+        }, request.now);
+      }
+      assertLeaseActive(signal);
+      const observations = await this.bridge.getStatus(bridgeAddress);
+      const operationCreatedAtMs = BigInt(operation.createdAt.getTime());
+      const completed = observations.find((item) =>
+        item.status === "COMPLETED" &&
+        item.inputAmountUnits === grossPusd &&
+        item.observedAtMs >= operationCreatedAtMs,
+      );
+      if (completed === undefined) {
+        if (observations.some((item) => item.status === "FAILED")) throw new Error("Polymarket withdrawal bridge failed");
+        if (operation.state === "bridge_pending") operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
+        throw new BridgePendingError(bridgeAddress);
+      }
+      bridgeObservedAtMs = completed.observedAtMs;
+      assertLeaseActive(signal);
+      receipt = await this.bridgeReceipt.verifyReceived({
+        bridgeAddress,
+        destination: request.solanaSettlementReceiver,
+        mint: request.solanaUsdcMint,
+        expectedMaximumUnits: grossPusd,
+        destinationTransactionHash: completed.destinationTxHash,
+      });
     }
-    const observations = await this.bridge.getStatus(withdrawalAddress.evm);
-    const operationCreatedAtMs = BigInt(operation.createdAt.getTime());
-    const completed = observations.find((item) =>
-      item.status === "COMPLETED" &&
-      item.inputAmountUnits === grossPusd &&
-      item.observedAtMs >= operationCreatedAtMs,
-    );
-    if (completed === undefined) {
-      if (observations.some((item) => item.status === "FAILED")) throw new Error("Polymarket withdrawal bridge failed");
-      if (operation.state === "bridge_pending") operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
-      throw new BridgePendingError(withdrawalAddress.evm);
-    }
-    const receipt = await this.bridgeReceipt.verifyReceived({
-      bridgeAddress: withdrawalAddress.evm,
-      destination: request.solanaSettlementReceiver,
-      mint: request.solanaUsdcMint,
-      expectedMaximumUnits: grossPusd,
-      destinationTransactionHash: completed.destinationTxHash,
-    });
     if (receipt.amountUnits < quote.minimumGrossValue || receipt.amountUnits > grossPusd) {
       throw new Error("bridged USDC amount is outside the signed withdrawal bounds");
     }
@@ -195,6 +296,7 @@ export class WithdrawalWorkflow {
       request.performanceFeeBps,
     );
     if (fees.userValueOut < quote.minValueOut) throw new Error("withdrawal user output is below the signed minimum");
+    assertLeaseActive(signal);
     const split = await this.splitter.distribute({
       idempotencyKey: `${request.operationId}:fee-split`,
       sourceBridgeTransaction: receipt.transactionSignature,
@@ -206,7 +308,14 @@ export class WithdrawalWorkflow {
       creatorAmountUnits: fees.creatorFee,
       protocolAmountUnits: fees.protocolFee,
     });
-    const executedAt = orders.reduce((latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest, completed.observedAtMs) / 1_000n;
+    await this.faults.after("withdrawal.fee_split_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionSignature: split.transactionSignature },
+    });
+    const executedAt = orders.reduce(
+      (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
+      bridgeObservedAtMs,
+    ) / 1_000n;
     assertExecutionTimestamp(executedAt, nowSeconds);
     const batch = executionBatchHash({
       kind: "withdrawal",
@@ -215,11 +324,12 @@ export class WithdrawalWorkflow {
       navReportHash: Buffer.from(pricing.navReportHash).toString("hex"),
       settlementNonce: request.settlementNonce,
       executedAtSeconds: executedAt,
-      bridgeSourceTxHash: transfer.transactionHash,
+      bridgeSourceTxHash: bridgeSourceTransaction,
       bridgeDestinationTxHash: receipt.transactionSignature,
       idlePusdUnits: idleAllocation,
       orders,
     });
+    assertLeaseActive(signal);
     const completedSettlement = await this.settlement.completeWithdrawal({
       intent: request.intent,
       navReportHash: pricing.navReportHash,
@@ -232,6 +342,10 @@ export class WithdrawalWorkflow {
       protocolFee: fees.protocolFee,
       creatorFee: fees.creatorFee,
       userValueOut: fees.userValueOut,
+    });
+    await this.faults.after("withdrawal.settlement_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionSignature: completedSettlement.transactionSignature },
     });
     if (operation.state === "bridge_completed") {
       operation = await this.operations.transition(operation.id, operation.version, "settlement_submitted", {

@@ -11,12 +11,19 @@ import type {
   SolanaFundingVerifierPort,
 } from "../execution/types.js";
 import type { SignedDepositIntent } from "../quotes/types.js";
+import type { FinancialExecutionGuardPort } from "../operations/index.js";
+import { NOOP_FAULT_INJECTOR, type FaultInjectorPort } from "../resilience/index.js";
 import {
   assertExecutionTimestamp,
   assertFreshSettlementPricing,
   type SettlementPricingPort,
   type SolanaSettlementGatewayPort,
 } from "../settlement/types.js";
+import type { WalletExecutionCoordinatorPort } from "../wallets/types.js";
+
+const assertLeaseActive = (signal: AbortSignal): void => {
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("execution wallet lease was lost");
+};
 
 export class BridgePendingError extends Error {
   public constructor(address: string) {
@@ -36,13 +43,25 @@ export interface DepositWorkflowRequest {
   readonly workflowId: string;
   readonly intent: SignedDepositIntent;
   readonly polymarketWallet: string;
+  readonly walletId: string;
   readonly preparedBridgeAddress: string;
   readonly solanaUsdcMint: string;
   readonly protocolFeeDestination: string;
   readonly fundingTransactionSignature: string;
   readonly maxSlippageBps: number;
-  readonly targets: readonly (WeightedExecutionTarget & { readonly worstBuyPriceUnits: bigint })[];
+  readonly targets: readonly (
+    WeightedExecutionTarget & {
+      readonly worstBuyPriceUnits: bigint;
+      readonly negativeRisk: boolean;
+    }
+  )[];
   readonly settlementNonce: bigint;
+  /** Optional local/staging execution path; hybrid_devnet uses live_bridge. */
+  readonly capitalMode?: "prefunded_staging" | "live_bridge";
+  /** Runs under the same exclusive wallet lease immediately before external execution. */
+  readonly beforeExecution?: () => Promise<void>;
+  /** Exactly-once portfolio attribution hook, still under the wallet lease. */
+  readonly afterSettlement?: (result: DepositWorkflowResult) => Promise<void>;
   readonly now: Date;
 }
 
@@ -65,6 +84,9 @@ export class DepositWorkflow {
     private readonly fak: FakExecutionPort,
     private readonly pricing: SettlementPricingPort,
     private readonly settlement: SolanaSettlementGatewayPort,
+    private readonly executionGuard: FinancialExecutionGuardPort,
+    private readonly walletCoordinator: WalletExecutionCoordinatorPort,
+    private readonly faults: FaultInjectorPort = NOOP_FAULT_INJECTOR,
   ) {}
 
   public async prepare(request: {
@@ -94,22 +116,44 @@ export class DepositWorkflow {
       checkpoint: {},
       createdAt: request.now,
     });
-    const address = await this.bridge.createDepositAddress(request.polymarketWallet);
     let operation = loaded.operation;
+    let bridgeAddress: string;
     if (operation.state === "created") {
+      const address = await this.bridge.createDepositAddress(request.polymarketWallet);
+      bridgeAddress = address.svm;
       operation = await this.operations.transition(operation.id, operation.version, "intent_verified", {
-        bridgeAddress: address.svm,
+        bridgeAddress,
       }, request.now);
+      await this.faults.after("deposit.bridge_address_created", {
+        operationId: request.operationId,
+        metadata: { bridgeAddress },
+      });
     } else {
       const storedAddress = operation.checkpoint.bridgeAddress;
-      if (storedAddress !== address.svm) {
-        throw new Error("deposit preparation checkpoint is missing or conflicts with the bridge address");
-      }
+      if (typeof storedAddress !== "string" || storedAddress.length === 0) throw new Error("deposit preparation checkpoint is missing the bridge address");
+      bridgeAddress = storedAddress;
     }
-    return Object.freeze({ operation, bridgeAddress: address.svm });
+    return Object.freeze({ operation, bridgeAddress });
   }
 
   public async execute(request: DepositWorkflowRequest): Promise<DepositWorkflowResult> {
+    return this.walletCoordinator.execute(request.walletId, request.operationId, async (signal) => {
+      assertLeaseActive(signal);
+      await this.executionGuard.authorize({
+        operationId: request.operationId,
+        basketId: request.intent.quote.basket.toBase58(),
+        walletId: request.walletId,
+        amountUnits: request.intent.quote.grossAmount,
+        now: request.now,
+      });
+      await request.beforeExecution?.();
+      const result = await this.executeLocked(request, signal);
+      await request.afterSettlement?.(result);
+      return result;
+    });
+  }
+
+  private async executeLocked(request: DepositWorkflowRequest, signal: AbortSignal): Promise<DepositWorkflowResult> {
     const prepared = await this.prepare({
       operationId: request.operationId,
       requestKey: request.requestKey,
@@ -123,6 +167,7 @@ export class DepositWorkflow {
     }
     let operation = prepared.operation;
     const quote = request.intent.quote;
+    assertLeaseActive(signal);
     await this.funding.verifyFinalizedTransfer({
       signature: request.fundingTransactionSignature,
       expectedUser: quote.user.toBase58(),
@@ -146,32 +191,49 @@ export class DepositWorkflow {
     if (operation.state === "funding_verified") {
       operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
     }
-    const observations = await this.bridge.getStatus(prepared.bridgeAddress);
-    const preparedAtMs = BigInt(prepared.operation.createdAt.getTime());
-    const completed = observations.find((item) =>
-      item.status === "COMPLETED" &&
-      item.inputAmountUnits === quote.quotedNetValue &&
-      item.observedAtMs >= preparedAtMs,
-    );
-    if (completed === undefined) {
-      if (observations.some((item) => item.status === "FAILED")) throw new Error("Polymarket deposit bridge failed");
-      if (operation.state === "bridge_pending") {
-        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
+    let credited: bigint;
+    let bridgeDestinationTxHash: string;
+    let bridgeObservedAtMs: bigint;
+    if (request.capitalMode === "prefunded_staging") {
+      credited = quote.quotedNetValue;
+      bridgeDestinationTxHash = `prefunded:${request.operationId}`;
+      const storedObservedAtMs = operation.checkpoint.bridgeObservedAtMs;
+      bridgeObservedAtMs = typeof storedObservedAtMs === "string"
+        ? BigInt(storedObservedAtMs)
+        : BigInt(request.now.getTime());
+    } else {
+      assertLeaseActive(signal);
+      const observations = await this.bridge.getStatus(prepared.bridgeAddress);
+      const preparedAtMs = BigInt(prepared.operation.createdAt.getTime());
+      const completed = observations.find((item) =>
+        item.status === "COMPLETED" &&
+        item.inputAmountUnits === quote.quotedNetValue &&
+        item.observedAtMs >= preparedAtMs,
+      );
+      if (completed === undefined) {
+        if (observations.some((item) => item.status === "FAILED")) throw new Error("Polymarket deposit bridge failed");
+        if (operation.state === "bridge_pending") {
+          operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
+        }
+        throw new BridgePendingError(prepared.bridgeAddress);
       }
-      throw new BridgePendingError(prepared.bridgeAddress);
+      if (completed.destinationTxHash === null) throw new Error("completed Polymarket deposit is missing its Polygon destination transaction");
+      bridgeDestinationTxHash = completed.destinationTxHash;
+      bridgeObservedAtMs = completed.observedAtMs;
+      assertLeaseActive(signal);
+      const credit = await this.creditVerifier.verifyPusdCredit({
+        destinationTransactionHash: completed.destinationTxHash,
+        polymarketWallet: request.polymarketWallet,
+        expectedMaximumUnits: quote.quotedNetValue,
+      });
+      credited = credit.amountUnits;
+      if (credited <= 0n || credited > quote.quotedNetValue) throw new Error("verified Polymarket pUSD credit is outside the deposit bounds");
     }
-    if (completed.destinationTxHash === null) throw new Error("completed Polymarket deposit is missing its Polygon destination transaction");
-    const credit = await this.creditVerifier.verifyPusdCredit({
-      destinationTransactionHash: completed.destinationTxHash,
-      polymarketWallet: request.polymarketWallet,
-      expectedMaximumUnits: quote.quotedNetValue,
-    });
-    const credited = credit.amountUnits;
-    if (credited <= 0n || credited > quote.quotedNetValue) throw new Error("verified Polymarket pUSD credit is outside the deposit bounds");
     if (operation.state === "bridge_pending") {
       operation = await this.operations.transition(operation.id, operation.version, "bridge_completed", {
         ...operation.checkpoint,
-        bridgeDestinationTxHash: completed.destinationTxHash,
+        bridgeDestinationTxHash,
+        bridgeObservedAtMs: bridgeObservedAtMs.toString(10),
         creditedPusdUnits: credited.toString(10),
       }, request.now);
     }
@@ -181,13 +243,20 @@ export class DepositWorkflow {
       const target = allocation.targets[index];
       const source = request.targets[index];
       if (target === undefined || source === undefined || target.amountUnits === 0n) continue;
-      orders.push(await this.fak.executeFak({
+      assertLeaseActive(signal);
+      const order = await this.fak.executeFak({
         clientOrderId: `${request.operationId}:buy:${index}`,
         tokenId: target.tokenId,
         side: "buy",
+        negativeRisk: source.negativeRisk,
         amountUnits: target.amountUnits,
         worstPriceUnits: source.worstBuyPriceUnits,
-      }));
+      });
+      orders.push(order);
+      await this.faults.after("deposit.fak_order_executed", {
+        operationId: request.operationId,
+        metadata: { clientOrderId: order.clientOrderId, orderId: order.orderId },
+      });
     }
     const spent = orders.reduce((sum, order) => sum + order.filledInputUnits, 0n);
     if (spent > credited) throw new Error("FAK buys spent more pUSD than the bridge credited");
@@ -199,6 +268,7 @@ export class DepositWorkflow {
         orderIds: orders.map((order) => order.orderId),
       }, request.now);
     }
+    assertLeaseActive(signal);
     const nowSeconds = BigInt(Math.floor(request.now.getTime() / 1_000));
     const pricing = await this.pricing.loadLatestPricing(quote.basket);
     assertFreshSettlementPricing(pricing, nowSeconds);
@@ -211,7 +281,10 @@ export class DepositWorkflow {
     );
     if (math.minimumNetValue !== quote.minimumNetValue) throw new Error("deposit minimum differs from the signed quote");
     if (math.sharesCredited < quote.minSharesOut) throw new Error("executed deposit credits fewer than the user-authorized minimum shares");
-    const executedAt = orders.reduce((latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest, completed.observedAtMs) / 1_000n;
+    const executedAt = orders.reduce(
+      (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
+      bridgeObservedAtMs,
+    ) / 1_000n;
     assertExecutionTimestamp(executedAt, nowSeconds);
     const batch = executionBatchHash({
       kind: "deposit",
@@ -221,10 +294,11 @@ export class DepositWorkflow {
       settlementNonce: request.settlementNonce,
       executedAtSeconds: executedAt,
       bridgeSourceTxHash: request.fundingTransactionSignature,
-      ...(completed.destinationTxHash === null ? {} : { bridgeDestinationTxHash: completed.destinationTxHash }),
+      bridgeDestinationTxHash,
       idlePusdUnits,
       orders,
     });
+    assertLeaseActive(signal);
     const result = await this.settlement.completeDeposit({
       intent: request.intent,
       navReportHash: pricing.navReportHash,
@@ -236,6 +310,10 @@ export class DepositWorkflow {
       netDepositValue: credited,
       sharesCredited: math.sharesCredited,
       protocolFee: quote.protocolFee,
+    });
+    await this.faults.after("deposit.settlement_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionSignature: result.transactionSignature },
     });
     if (operation.state === "trading_completed") {
       operation = await this.operations.transition(operation.id, operation.version, "settlement_submitted", {

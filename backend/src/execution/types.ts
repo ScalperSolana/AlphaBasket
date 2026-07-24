@@ -54,6 +54,7 @@ export interface FakOrderRequest {
   readonly clientOrderId: string;
   readonly tokenId: string;
   readonly side: OrderSide;
+  readonly negativeRisk: boolean;
   /** BUY: pUSD to spend. SELL: outcome-token units to sell. */
   readonly amountUnits: bigint;
   readonly worstPriceUnits: bigint;

@@ -45,6 +45,7 @@ export class JsonHttpClient {
   public async get<Schema extends z.ZodTypeAny>(
     url: string,
     schema: Schema,
+    headers: Readonly<Record<string, string>> = {},
   ): Promise<z.output<Schema>> {
     const controller = new AbortController();
     let timedOut = false;
@@ -55,7 +56,7 @@ export class JsonHttpClient {
     try {
       const response = await this.options.fetch(url, {
         method: "GET",
-        headers: Object.freeze({ accept: "application/json" }),
+        headers: Object.freeze({ accept: "application/json", ...headers }),
         signal: controller.signal,
       });
       const body = await response.text();
@@ -98,6 +99,35 @@ export class JsonHttpClient {
         ...headers,
       }),
       body: JSON.stringify(body),
+    }, schema);
+  }
+
+  public async postSerialized<Schema extends z.ZodTypeAny>(
+    url: string,
+    serializedJsonBody: string,
+    schema: Schema,
+    headers: Readonly<Record<string, string>> = {},
+  ): Promise<z.output<Schema>> {
+    if (
+      serializedJsonBody.length === 0 ||
+      serializedJsonBody.length > 262_144 ||
+      !serializedJsonBody.startsWith("{")
+    ) {
+      throw new TypeError("serialized JSON body is invalid");
+    }
+    try {
+      JSON.parse(serializedJsonBody);
+    } catch {
+      throw new TypeError("serialized JSON body is malformed");
+    }
+    return this.request(url, {
+      method: "POST",
+      headers: Object.freeze({
+        accept: "application/json",
+        "content-type": "application/json",
+        ...headers,
+      }),
+      body: serializedJsonBody,
     }, schema);
   }
 

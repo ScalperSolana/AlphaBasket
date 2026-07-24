@@ -17,8 +17,8 @@ const responseSchema = z.object({
 }).passthrough();
 
 export interface SignedClobOrderEnvelope {
-  readonly owner: string;
-  readonly order: Readonly<Record<string, unknown>>;
+  /** Exact JSON body authenticated by the gateway's L2 HMAC. */
+  readonly serializedBody: string;
   readonly authenticationHeaders: Readonly<Record<string, string>>;
 }
 
@@ -27,6 +27,7 @@ export interface ClobOrderSignerPort {
     readonly clientOrderId: string;
     readonly tokenId: string;
     readonly side: "BUY" | "SELL";
+    readonly negativeRisk: boolean;
     readonly makerAmountUnits: bigint;
     readonly takerAmountUnits: bigint;
   }): Promise<SignedClobOrderEnvelope>;
@@ -63,17 +64,17 @@ export class ClobFakRestExecution implements FakExecutionPort {
       clientOrderId: request.clientOrderId,
       tokenId: request.tokenId,
       side: request.side === "buy" ? "BUY" : "SELL",
+      negativeRisk: request.negativeRisk,
       makerAmountUnits: amounts.maker,
       takerAmountUnits: amounts.taker,
     });
-    const raw = await this.http.post(`${this.baseUrl}/order`, {
-      order: envelope.order,
-      owner: envelope.owner,
-      orderType: "FAK",
-      deferExec: false,
-      postOnly: false,
-    }, responseSchema, envelope.authenticationHeaders);
-    if (!raw.success || raw.status === "live" || raw.errorMsg.length > 0) {
+    const raw = await this.http.postSerialized(
+      `${this.baseUrl}/order`,
+      envelope.serializedBody,
+      responseSchema,
+      envelope.authenticationHeaders,
+    );
+    if (!raw.success || raw.status !== "matched" || raw.errorMsg.length > 0) {
       throw new Error(`Polymarket rejected FAK order: ${raw.errorMsg || raw.status}`);
     }
     const making = BigInt(raw.makingAmount);

@@ -20,6 +20,13 @@ import {
 } from "../settlement/types.js";
 import { BridgePendingError } from "../deposits/deposit-workflow.js";
 import { PublicKey } from "@solana/web3.js";
+import { NOOP_FAULT_INJECTOR, type FaultInjectorPort } from "../resilience/index.js";
+import type { FinancialExecutionGuardPort } from "../operations/index.js";
+import type { WalletExecutionCoordinatorPort } from "../wallets/types.js";
+
+const assertLeaseActive = (signal: AbortSignal): void => {
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("execution wallet lease was lost");
+};
 
 export interface ProtocolFeeWithdrawalRequest {
   readonly operationId: string;
@@ -33,9 +40,16 @@ export interface ProtocolFeeWithdrawalRequest {
   readonly protocolFeeShares: bigint;
   readonly totalSharesOutstanding: bigint;
   readonly idlePusdUnits: bigint;
-  readonly targets: readonly (WeightedExecutionTarget & { readonly currentUnits: bigint; readonly worstSellPriceUnits: bigint })[];
+  readonly targets: readonly (
+    WeightedExecutionTarget & {
+      readonly currentUnits: bigint;
+      readonly worstSellPriceUnits: bigint;
+      readonly negativeRisk: boolean;
+    }
+  )[];
   readonly maxSlippageBps: number;
   readonly polymarketWallet: string;
+  readonly walletId: string;
   readonly protocolDestination: string;
   readonly solanaSettlementReceiver: string;
   readonly solanaUsdcMint: string;
@@ -63,9 +77,26 @@ export class ProtocolFeeWithdrawalWorkflow {
     private readonly splitter: SolanaAtomicSplitPort,
     private readonly pricing: SettlementPricingPort,
     private readonly settlement: SolanaSettlementGatewayPort,
+    private readonly executionGuard: FinancialExecutionGuardPort,
+    private readonly walletCoordinator: WalletExecutionCoordinatorPort,
+    private readonly faults: FaultInjectorPort = NOOP_FAULT_INJECTOR,
   ) {}
 
   public async execute(request: ProtocolFeeWithdrawalRequest): Promise<ProtocolFeeWithdrawalResult> {
+    return this.walletCoordinator.execute(request.walletId, request.operationId, async (signal) => {
+      assertLeaseActive(signal);
+      await this.executionGuard.authorize({
+        operationId: request.operationId,
+        basketId: request.basket.toBase58(),
+        walletId: request.walletId,
+        amountUnits: valueForShares(request.shareAmount, request.sharePrice),
+        now: request.now,
+      });
+      return this.executeLocked(request, signal);
+    });
+  }
+
+  private async executeLocked(request: ProtocolFeeWithdrawalRequest, signal: AbortSignal): Promise<ProtocolFeeWithdrawalResult> {
     if (request.shareAmount <= 0n || request.shareAmount > request.protocolFeeShares) throw new RangeError("protocol share redemption exceeds available protocol shares");
     const navHash = bytes32(request.navReportHash, "navReportHash");
     const requestHash = executionRequestHash({
@@ -94,13 +125,20 @@ export class ProtocolFeeWithdrawalWorkflow {
       const allocation = allocations[index];
       const source = request.targets[index];
       if (allocation === undefined || source === undefined || allocation.amountUnits === 0n) continue;
-      orders.push(await this.fak.executeFak({
+      assertLeaseActive(signal);
+      const order = await this.fak.executeFak({
         clientOrderId: `${request.operationId}:protocol-sell:${index}`,
         tokenId: allocation.tokenId,
         side: "sell",
+        negativeRisk: source.negativeRisk,
         amountUnits: allocation.amountUnits,
         worstPriceUnits: source.worstSellPriceUnits,
-      }));
+      });
+      orders.push(order);
+      await this.faults.after("protocol_fee.fak_order_executed", {
+        operationId: request.operationId,
+        metadata: { clientOrderId: order.clientOrderId, orderId: order.orderId },
+      });
     }
     const proceeds = orders.reduce((sum, order) => sum + order.filledOutputUnits, 0n);
     const idleAllocation = (request.idlePusdUnits * request.shareAmount) / request.totalSharesOutstanding;
@@ -113,25 +151,47 @@ export class ProtocolFeeWithdrawalWorkflow {
         orderIds: orders.map((order) => order.orderId),
       }, request.now);
     }
-    const address = await this.bridge.createWithdrawalAddress({
-      polymarketWallet: request.polymarketWallet,
-      solanaRecipient: request.solanaSettlementReceiver,
-      solanaChainId: request.solanaChainId,
-      solanaUsdcMint: request.solanaUsdcMint,
-    });
-    const transfer = await this.pusdTransfer.transferPusd({
-      idempotencyKey: `${request.operationId}:protocol-bridge`,
-      destinationEvmAddress: address.evm,
-      amountUnits: grossPusd,
-    });
+    let bridgeAddress: string;
     if (operation.state === "trading_completed") {
+      assertLeaseActive(signal);
+      const address = await this.bridge.createWithdrawalAddress({
+        polymarketWallet: request.polymarketWallet,
+        solanaRecipient: request.solanaSettlementReceiver,
+        solanaChainId: request.solanaChainId,
+        solanaUsdcMint: request.solanaUsdcMint,
+      });
+      bridgeAddress = address.evm;
       operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
         ...operation.checkpoint,
-        bridgeAddress: address.evm,
+        bridgeAddress,
+      }, request.now);
+      await this.faults.after("protocol_fee.bridge_address_created", {
+        operationId: request.operationId,
+        metadata: { bridgeAddress },
+      });
+    } else {
+      const stored = operation.checkpoint.bridgeAddress;
+      if (typeof stored !== "string" || stored.length === 0) throw new Error("protocol withdrawal checkpoint is missing the bridge address");
+      bridgeAddress = stored;
+    }
+    assertLeaseActive(signal);
+    const transfer = await this.pusdTransfer.transferPusd({
+      idempotencyKey: `${request.operationId}:protocol-bridge`,
+      destinationEvmAddress: bridgeAddress,
+      amountUnits: grossPusd,
+    });
+    await this.faults.after("protocol_fee.pusd_transfer_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionHash: transfer.transactionHash },
+    });
+    if (operation.state === "bridge_pending" && operation.checkpoint.pusdTransferTransaction === undefined) {
+      operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+        ...operation.checkpoint,
         pusdTransferTransaction: transfer.transactionHash,
       }, request.now);
     }
-    const observations = await this.bridge.getStatus(address.evm);
+    assertLeaseActive(signal);
+    const observations = await this.bridge.getStatus(bridgeAddress);
     const operationCreatedAtMs = BigInt(operation.createdAt.getTime());
     const completed = observations.find((item) =>
       item.status === "COMPLETED" &&
@@ -141,10 +201,11 @@ export class ProtocolFeeWithdrawalWorkflow {
     if (completed === undefined) {
       if (observations.some((item) => item.status === "FAILED")) throw new Error("protocol withdrawal bridge failed");
       if (operation.state === "bridge_pending") operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", operation.checkpoint, request.now);
-      throw new BridgePendingError(address.evm);
+      throw new BridgePendingError(bridgeAddress);
     }
+    assertLeaseActive(signal);
     const receipt = await this.bridgeReceipt.verifyReceived({
-      bridgeAddress: address.evm,
+      bridgeAddress,
       destination: request.solanaSettlementReceiver,
       mint: request.solanaUsdcMint,
       expectedMaximumUnits: grossPusd,
@@ -166,6 +227,7 @@ export class ProtocolFeeWithdrawalWorkflow {
       request.maxSlippageBps,
     );
     if (receipt.amountUnits < refreshedMinimumGross) throw new Error("protocol redemption is below the refreshed on-chain slippage floor");
+    assertLeaseActive(signal);
     const distribution = await this.splitter.distribute({
       idempotencyKey: `${request.operationId}:protocol-transfer`,
       sourceBridgeTransaction: receipt.transactionSignature,
@@ -176,6 +238,10 @@ export class ProtocolFeeWithdrawalWorkflow {
       userAmountUnits: 0n,
       creatorAmountUnits: 0n,
       protocolAmountUnits: receipt.amountUnits,
+    });
+    await this.faults.after("protocol_fee.distribution_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionSignature: distribution.transactionSignature },
     });
     const executedAt = orders.reduce((latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest, completed.observedAtMs) / 1_000n;
     assertExecutionTimestamp(executedAt, nowSeconds);
@@ -191,6 +257,7 @@ export class ProtocolFeeWithdrawalWorkflow {
       idlePusdUnits: idleAllocation,
       orders,
     });
+    assertLeaseActive(signal);
     const settlement = await this.settlement.completeProtocolFeeWithdrawal({
       basket: request.basket,
       navReportHash: pricing.navReportHash,
@@ -201,6 +268,10 @@ export class ProtocolFeeWithdrawalWorkflow {
       basketNavValue: pricing.basketNavValue,
       sharePrice: pricing.sharePrice,
       grossRealizedValue: receipt.amountUnits,
+    });
+    await this.faults.after("protocol_fee.settlement_submitted", {
+      operationId: request.operationId,
+      metadata: { transactionSignature: settlement.transactionSignature },
     });
     if (operation.state === "bridge_completed") {
       operation = await this.operations.transition(operation.id, operation.version, "settlement_submitted", {
