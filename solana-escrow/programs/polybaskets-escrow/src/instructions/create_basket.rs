@@ -224,7 +224,7 @@ pub(crate) fn verify_composer_signature(
 
     let data = &ed_ix.data;
     require!(
-        data.len() >= 16 && data[0] == 1,
+        data.len() >= 16 && data[0] == 1 && data[1] == 0,
         EscrowError::MalformedCompositionSignature
     );
     let read_u16 = |offset: usize| -> Result<u16> {
