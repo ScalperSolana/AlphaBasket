@@ -1,420 +1,332 @@
 # AlphaBasket
 
-AlphaBasket is a Solana-native prediction-basket protocol. It lets a creator
-combine active Polymarket outcomes into a weighted basket, lets users stake
-USDC against a signed entry index, settles the basket after every underlying
-market resolves, and pays each position from a basket-specific escrow vault.
+AlphaBasket is a real-position Polymarket basket protocol with share accounting
+on Solana.
 
-The repository also contains a quote signer, an automated settler, and a
-SliceFund-derived AI/MCP backend. The AI service can research a thesis, map it
-to verified Polymarket markets, normalize weights to 10,000 basis points, and
-create or interact with the same on-chain baskets as any other client. It does
-not add or replace frontend UI.
+The current V2 architecture deliberately separates accounting from capital:
 
-Configured fresh devnet program target:
+- The AlphaBasket program runs on **Solana devnet** during internal testing.
+- User USDC deposits and withdrawal payouts use **Solana mainnet-beta**.
+- Trading and position custody use **Polymarket on Polygon mainnet**.
+- The Solana program records baskets, shares, fees, lifecycle state and
+  immutable settlement receipts. It does **not** custody USDC or pUSD.
+
+Configured devnet program ID:
 `5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm`.
 
-## Architecture
+## Current architecture
 
 ```mermaid
 flowchart LR
-    Wallet["Wallet / AlphaBasket frontend"]
-    Agent["AI agent or MCP client"]
-    Quote["Bet quote signer :4360"]
-    AI["AI HTTP server :4370"]
-    Gamma["Polymarket Gamma API"]
-    Settler["Settler bot"]
-    Program["PolyBaskets Anchor program"]
-    Vaults["Basket USDC vault PDAs"]
-    Treasury["Configured treasury-usdc PDA"]
+    User["User wallet"]
+    API["AlphaBasket API"]
+    Bridge["Polymarket Bridge API"]
+    CLOB["Polymarket CLOB"]
+    Polygon["Shared Polygon execution wallet"]
+    Settlement["Solana mainnet settlement wallet"]
+    Program["AlphaBasket program on devnet"]
+    Indexer["Indexer and NAV services"]
+    Gateway["Key-holding execution gateway"]
+    Signer["KMS / HSM signer"]
 
-    Wallet -->|"create, stake, claim"| Program
-    Wallet -->|"entry-index quote"| Quote
-    Agent --> AI
-    AI -->|"research and verified market mapping"| Gamma
-    AI -->|"create, prepare stake/claim, operator actions"| Program
-    AI --> Quote
-    Quote --> Gamma
-    Quote -->|"reads basket composition"| Program
-    Settler --> Gamma
-    Settler -->|"propose and finalize"| Program
-    Program --> Vaults
-    Program --> Treasury
+    User -->|"signed intent"| API
+    User -->|"mainnet USDC deposit"| Bridge
+    Bridge -->|"pUSD credit"| Polygon
+    API --> Gateway
+    Gateway --> Signer
+    Gateway -->|"EIP-712 + HMAC FAK orders"| CLOB
+    CLOB --> Polygon
+    Polygon -->|"pUSD withdrawal"| Bridge
+    Bridge -->|"mainnet USDC"| Settlement
+    Gateway -->|"user / creator / protocol split"| User
+    API -->|"complete_* accounting"| Program
+    Program --> Indexer
+    Indexer -->|"NAV and share state"| API
 ```
 
-| Component | Location | Responsibility |
-| --- | --- | --- |
-| React frontend | `src/` | Wallet connection, basket builder, staking, portfolio, settlement and claim UX |
-| Solana escrow | `solana-escrow/` | Anchor program, USDC custody, limits, fees, settlement and payouts |
-| Quote signer | `bet-quote-service/` | Reads basket composition and live prices, then signs short-lived Ed25519 entry-index quotes |
-| Settler | `settler-bot/` | Polls Polymarket, proposes resolved indexes, waits 12 minutes and finalizes |
-| AI/MCP server | `ai-server/` | Thesis research, market verification, weight mapping and on-chain agent tools |
+### Deposit flow
 
-### On-chain accounts
+1. The API creates a short-lived deposit quote and the user signs the exact
+   intent.
+2. The user submits one Solana-mainnet transaction containing:
+   - the net USDC amount to the Polymarket bridge address; and
+   - the 0.5% deposit fee to the protocol destination.
+3. The backend verifies both finalized mainnet token-account deltas.
+4. The Bridge API converts the net deposit to pUSD in the assigned Polygon
+   execution wallet.
+5. The execution worker submits FAK buys. Partial fills are accepted and any
+   unspent pUSD remains attributed to the basket as idle pUSD.
+6. The backend reloads a fresh off-chain NAV and submits `complete_deposit` to
+   the Solana-devnet program.
+7. The program verifies the user intent, backend authority, execution
+   attestation, limits and accounting math before minting internal shares.
 
-- `Config` PDA, seeds `["config"]`: admin, oracle authority, quote signer,
-  accepted USDC mint, canonical treasury token account and pause state.
-- `treasury-usdc` PDA, seeds `["treasury-usdc"]`: created once by
-  `initialize`; receives protocol fees and swept surplus. Its token authority
-  is the config admin.
-- `Basket` PDA, seeds `["basket", basket_id]`: composition, status, indexes,
-  aggregate deposits and claim counters.
-- Basket vault PDA, seeds `["vault", basket_id]`: legacy SPL Token account
-  holding position principal and house liquidity.
-- `Position` PDA, seeds `["position", basket, owner]`: one wallet's cumulative
-  deposit, net principal, entry index, quote nonce and claim state.
+### Withdrawal flow
 
-Basket status progresses `Active -> Proposed -> Settled`. Sweeping surplus does
-not change the status.
+1. The user signs a withdrawal intent for a specific share amount and minimum
+   output.
+2. The backend liquidates the basket exposure pro rata using FAK sells and
+   includes the redeemed share of idle pUSD.
+3. Realized pUSD is transferred to a Bridge API withdrawal address targeting
+   the configured Solana-mainnet settlement wallet.
+4. The backend verifies the finalized mainnet USDC receipt.
+5. The execution gateway atomically distributes mainnet USDC to the user,
+   creator and protocol.
+6. Only after those effects are verified does the backend submit
+   `complete_withdrawal` to the Solana-devnet program.
 
-### Program instructions
+The same split applies to protocol management-share redemption: capital moves
+on mainnet/Polygon while the accounting completion runs on devnet.
 
-| Instruction | Who may call | Purpose |
-| --- | --- | --- |
-| `initialize` | First signer only, once | Creates Config and treasury USDC PDA |
-| `set_authorities` | Admin | Rotates oracle and/or quote signer |
-| `set_paused` | Admin | Blocks stake and claim while paused |
-| `create_basket` | Any signer | Stores a valid weighted Polymarket basket and creates its vault |
-| `stake` | User | Verifies a signed quote, charges the deposit fee and credits a position |
-| `fund_basket` | Any signer | Adds house liquidity without consuming deposit caps |
-| `propose_settlement` | Oracle authority | Proposes the resolved basket index |
-| `finalize_settlement` | Any signer | Finalizes after the 12-minute challenge window |
-| `claim` | Position owner | Pays the settled position and routes the withdrawal fee |
-| `sweep_surplus` | Admin | Moves remaining vault USDC after every position has claimed |
+## Share accounting and fees
 
-## Economics and limits
-
-- Deposit fee: 2% of every gross user deposit, sent directly to the configured
-  treasury. The remaining 98% becomes position principal.
-- Withdrawal fee: 2% of the gross settled payout, sent to the same treasury.
-- Gross payout: `net principal × settlement index / entry index`.
-- Per-wallet cap: 500 gross USDC per basket, cumulatively.
-- Per-basket cap: 10,000 gross USDC across all users.
-- `fund_basket` liquidity is separate and does not consume either user cap.
-- Fees round up to the nearest USDC base unit. Index and payout division rounds
-  down.
-- `sweep_surplus` is available only after settlement and after all recorded
-  positions claim. It transfers the exact remaining vault balance without
-  changing basket status or accounting.
-
-The program accepts a six-decimal legacy SPL Token mint. Token-2022 mints are
-intentionally rejected.
-
-## Prerequisites
-
-- Node.js 20 or newer and npm
-- Rust and Cargo
-- Solana CLI 2.3.x
-- Anchor CLI 0.32.1
-- A Solana wallet funded with devnet SOL
-- A six-decimal devnet USDC mint and token balances for end-to-end testing
-
-Check the toolchain:
-
-```bash
-node --version
-npm --version
-rustc --version
-solana --version
-anchor --version
+```text
+Share price = current basket NAV / total shares outstanding
+Shares minted = actual net deposit value / current share price
 ```
 
-## Install
+One share equals one US dollar only for the basket's first-ever deposit. Future
+deposits and withdrawals use the current off-chain NAV and on-chain share
+supply.
 
-Install each independently versioned package:
+Current fee model:
+
+| Fee | Recipient | Rule |
+| --- | --- | --- |
+| Deposit | Protocol | 0.5% |
+| Management/AUM | Protocol | 0.35% per 30 days, accrued proportionally to exact elapsed seconds through share dilution |
+| Early withdrawal | Protocol | 2% before 60 days |
+| Mature withdrawal | Protocol | 1% at or after 60 days |
+| Performance | Creator | 0–20%, default 10%, charged only on redeemed-share profit |
+
+Management fees do not sell Polymarket positions. The program mints protocol
+shares, diluting the existing supply. A scheduled keeper accrues active baskets,
+and every financial/lifecycle instruction provides a lazy-accrual fallback.
+
+Performance fees follow redeemed-share high-water/cost-basis accounting so
+burned shares cannot be charged twice. Multiple deposits use weighted-average
+cost basis and holding time.
+
+Existing limits remain:
+
+- Maximum cumulative gross deposit per user per basket: 500 USDC.
+- Maximum cumulative gross deposit per basket: 10,000 USDC.
+- Maximum weight for one Polymarket event: 4,000 bps (40%).
+- Composition weights must total 10,000 bps.
+
+## On-chain program
+
+Location: `solana-escrow/`
+
+The program stores four primary account types:
+
+- `Config`: authorities, protocol destinations, limits and pause state.
+- `Basket`: signed composition, lifecycle, share supply and fee state.
+- `Position`: user shares, weighted cost basis, holding time and reserved
+  extension space.
+- `SettlementReceipt`: immutable replay protection for completed external
+  executions.
+
+Important instructions:
+
+| Instruction | Purpose |
+| --- | --- |
+| `initialize` | Initialize protocol configuration and signer roles |
+| `create_basket` | Verify the Composer Ed25519 authorization and create a basket |
+| `complete_deposit` | Verify the signed user intent and credit shares after external execution |
+| `complete_withdrawal` | Burn shares and record the verified mainnet payout/fee split |
+| `accrue_management_fee` | Mint exact-time-weighted protocol management shares |
+| `complete_protocol_fee_withdrawal` | Record redemption of protocol-owned shares |
+| `begin_reconstitution` / `complete_reconstitution` | Pause, execute and commit a signed new composition |
+| `begin_resolution` / `record_final_settlement` | Resolve and finalize non-perpetual baskets |
+| `set_authorities` / `set_limits` / `set_paused` | Admin security controls |
+
+Basket composition is not supplied directly by an arbitrary creator. The
+Composer service computes markets, outcomes and weights off-chain, signs the
+canonical composition, and the program verifies that Ed25519 signature plus all
+structural constraints. Raw Polymarket depth and volume are not stored
+on-chain.
+
+## Backend
+
+Location: `backend/`
+
+| Module | Responsibility |
+| --- | --- |
+| `accounting` | Integer-only TypeScript parity with the Rust financial math |
+| `contract` | Canonical IDL, PDAs, intent/composition encoders and instruction builders |
+| `composer` | Deterministic filtering, weighting and signed basket composition |
+| `server` | Quote, intent, funding, operation-status and basket APIs |
+| `execution` | Durable operation state machine, allocation and attestations |
+| `deposits` / `withdrawals` | Live bridge, FAK execution and `complete_*` workflows |
+| `gateway` | CLOB signing/authentication, Polygon transfers and Solana-mainnet fee distribution |
+| `indexer` / `nav` | Finalized devnet projections and immutable off-chain NAV snapshots |
+| `lifecycle` | Management-fee keeper, reconstitution, resolution and final settlement |
+| `ledger` | Append-only double-entry virtual portfolio attribution |
+| `wallets` | Sticky, shard-ready basket-to-execution-wallet allocation |
+| `reconciliation` | Cross-system checks, dashboard data and alert outbox |
+| `resilience` | Provider retry policies and deterministic fault injection |
+
+PostgreSQL is authoritative for backend workflow state and virtual portfolio
+attribution. Finalized Solana accounts are authoritative for share accounting.
+Polymarket balances and fills are independently reconciled against both.
+
+### Financial API
+
+- `POST /v1/quotes/deposit`
+- `POST /v1/quotes/withdrawal`
+- `POST /v1/intents/deposit`
+- `POST /v1/intents/withdrawal`
+- `POST /v1/operations/:id/funding`
+- `GET /v1/operations/:id`
+- `POST /v1/baskets`
+
+Financial mutations require idempotency keys. Composer and operations routes use
+separate bearer authentication.
+
+## Hybrid environment
+
+Copy `backend/.env.example` to `backend/.env` and configure at least:
+
+```text
+DEPLOYMENT_MODE=hybrid_devnet
+
+ACCOUNTING_SOLANA_CLUSTER=devnet
+ACCOUNTING_SOLANA_RPC_URL=<Solana devnet RPC>
+
+CAPITAL_SOLANA_CLUSTER=mainnet-beta
+CAPITAL_SOLANA_RPC_URL=<Solana mainnet RPC>
+CAPITAL_SOLANA_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+
+CAPITAL_MODE=live_bridge
+POLYGON_CHAIN_ID=137
+POLYGON_RPC_URL=<Polygon mainnet RPC>
+
+POLYMARKET_CLOB_API_KEY=<CLOB API key>
+POLYMARKET_CLOB_API_SECRET=<CLOB API secret>
+POLYMARKET_CLOB_API_PASSPHRASE=<CLOB passphrase>
+POLYMARKET_EXECUTION_WALLET=<Polygon execution wallet>
+POLYMARKET_PUSD_TOKEN_ADDRESS=<Polygon pUSD token>
+SOLANA_SETTLEMENT_RECEIVER=<Solana mainnet settlement owner>
+
+EXECUTION_GATEWAY_URL=<internal gateway URL>
+EXECUTION_GATEWAY_TOKEN=<random 32+ character secret>
+REMOTE_SIGNER_URL=<KMS/HSM signing service>
+REMOTE_SIGNER_TOKEN=<random 32+ character secret>
+```
+
+The backend rejects hybrid startup unless:
+
+- accounting is labelled devnet;
+- capital is labelled mainnet-beta;
+- capital mode is `live_bridge`;
+- Polymarket uses Polygon chain ID 137; and
+- accounting and capital use different RPC URLs.
+
+Public-network workers also verify each RPC's genesis hash, preventing an
+endpoint labelled as devnet from silently pointing to mainnet or vice versa.
+
+## Running the backend
+
+Requirements:
+
+- Node.js 22 or newer.
+- PostgreSQL 16 or compatible.
+- Temporal.
+- Solana CLI and Anchor 0.32.1 for program development.
+- An external KMS/HSM signer endpoint for live execution.
+
+Install and migrate:
 
 ```bash
 npm install
-npm install --prefix ai-server
-npm install --prefix bet-quote-service
-npm install --prefix settler-bot
-npm install --prefix solana-escrow
+npm --prefix backend install
+npm run migrate:backend
 ```
 
-## Environment setup
-
-The root examples document all variables. Keep real private keys out of Git.
+Start production-style processes in this order:
 
 ```bash
-cp .env.example .env
-cp .env.example ai-server/.env
-cp .env.example bet-quote-service/.env
-cp .env.example settler-bot/.env
-cp .env.secrets.example .env.secrets
+npm run start:indexer:backend
+npm run start:nav:backend
+npm run start:execution-gateway:backend
+npm run start:execution-dispatcher:backend
+npm run start:execution:backend
+npm run start:lifecycle:backend
+npm run start:backend
 ```
 
-Copy only the secrets needed by a service into its untracked `.env`, or inject
-them through your process manager:
+Development equivalents use the `dev:*:backend` scripts in the root
+`package.json`.
 
-- `BET_QUOTE_SIGNER_KEYPAIR` or `BET_QUOTE_SIGNER_KEYPAIR_FILE`
-- `SETTLER_KEYPAIR` or `SETTLER_KEYPAIR_FILE`
-- `AI_OPERATOR_KEYPAIR` or `AI_OPERATOR_KEYPAIR_FILE`
-- `AI_WRITE_API_KEY` for state-changing AI HTTP routes
-- `GEMINI_API_KEY` for AI-ranked thesis research
+The API listens on `127.0.0.1:3001` by default. The execution gateway listens
+on `127.0.0.1:3002` by default.
 
-The quote signer key must match `Config.quote_signer`. The settler key must
-match `Config.oracle_authority`; do not reuse the same key for both roles.
+## Verification
 
-For local frontend staking, set:
-
-```dotenv
-VITE_QUOTE_API_URL=http://127.0.0.1:4360
-```
-
-There is intentionally no `VITE_AI_API_URL`: the SliceFund integration is a
-backend/MCP integration and does not alter the completed AlphaBasket UI.
-`VITE_TREASURY_ADDRESS` is legacy UI metadata; the program always resolves and
-validates the treasury token account from on-chain Config.
-
-## Run locally
-
-Run services in separate terminals. Start the quote signer before any flow
-that creates a stake.
-
-### 1. Quote signer
+Backend:
 
 ```bash
-npm --prefix bet-quote-service run dev
+npm --prefix backend run typecheck
+npm --prefix backend test
+npm --prefix backend run idl:check
+npm --prefix backend audit --omit=dev
 ```
 
-Health check:
-
-```bash
-curl http://127.0.0.1:4360/health
-```
-
-### 2. AI HTTP service
-
-```bash
-npm run dev:ai
-```
-
-Health check:
-
-```bash
-curl http://127.0.0.1:4370/api/health
-```
-
-The detailed HTTP routes and MCP tools are documented in
-[ai-server/README.md](ai-server/README.md).
-
-### 3. Settler bot
-
-```bash
-npm --prefix settler-bot run dev
-```
-
-The bot polls immediately and then uses `SETTLER_BOT_POLL_INTERVAL_MS`. It
-proposes only when every underlying market is resolved and finalizes only after
-the on-chain 12-minute window.
-
-### 4. Frontend
-
-```bash
-npm run dev
-```
-
-Open `http://localhost:8080`.
-
-### MCP server
-
-The MCP transport is stdio and runs separately from the HTTP server:
-
-```bash
-npm run mcp:ai
-```
-
-Example client configuration:
-
-```json
-{
-  "mcpServers": {
-    "alphabasket": {
-      "command": "npm",
-      "args": [
-        "--prefix",
-        "/absolute/path/to/AlphaBasket/ai-server",
-        "run",
-        "mcp"
-      ],
-      "env": {
-        "GEMINI_API_KEY": "...",
-        "AI_OPERATOR_KEYPAIR_FILE": "/absolute/path/to/operator.json",
-        "AI_QUOTE_API_URL": "http://127.0.0.1:4360"
-      }
-    }
-  }
-}
-```
-
-### Docker Compose
-
-Build and run only the Solana services from the larger compose file:
-
-```bash
-docker compose --env-file .env --env-file .env.secrets up --build bet-quote-service ai-server settler-bot
-```
-
-Stop them with:
-
-```bash
-docker compose down
-```
-
-## Build and test
-
-### Everything
-
-```bash
-npm run build
-npm run build:ai
-npm --prefix bet-quote-service run build
-npm --prefix settler-bot run build
-```
-
-### Frontend
-
-```bash
-npm run lint
-npm run build
-npm run preview
-```
-
-### AI server
-
-```bash
-npm run test:ai
-npm run build:ai
-npm --prefix ai-server start
-```
-
-### Anchor program
+Contract:
 
 ```bash
 cd solana-escrow
-cargo fmt --check
 anchor build
-npm test
+anchor test
 ```
 
-`npm test` runs the Bankrun suite without requiring a local validator. It
-covers the happy path, forged and malformed quotes, settlement authorization,
-the challenge window, vault underfunding, both deposit caps, fee routing and
-admin-only surplus sweeping.
-
-Useful contract maintenance commands:
+Check the configured devnet deployment:
 
 ```bash
-anchor keys list
-anchor clean
-anchor build
-solana program show <PROGRAM_ID> --url devnet
-solana program show --buffers --url devnet
+solana program show \
+  5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm \
+  --url devnet
 ```
 
-## Deploy the Anchor program to devnet
+## Security model
 
-### Fresh deployment
+- No private key belongs in the API server, worker environment or database.
+- Role-separated Composer, accounting-completion, Polygon-order and
+  Solana-settlement keys are accessed through a policy-enforced remote signer.
+- CLOB API credentials remain inside the authenticated execution gateway.
+- Exact signed transaction/order payloads are journaled before broadcast.
+- Every external effect has a deterministic idempotency key and immutable
+  accounting receipt.
+- Shared execution wallets permit only one capital-changing operation at a
+  time; scaling uses sticky wallet shards.
+- Hybrid mode moves real mainnet capital and therefore uses the same allowlists,
+  caps and reconciliation controls as a production canary.
 
-Use a fresh program ID when account layouts are incompatible with an existing
-deployment. Never overwrite or delete an existing program keypair.
+## Current integration status
 
-```bash
-cd solana-escrow
-solana config set --url devnet
-solana-keygen new --no-bip39-passphrase --outfile target/deploy/polybaskets_escrow-keypair.json
-anchor keys sync
-anchor build
-```
+The contract, backend domain logic, API routes, workers, execution gateway,
+management-fee automation, reconciliation and security tests are implemented.
 
-Confirm that `anchor keys list`, `declare_id!` in
-`programs/polybaskets-escrow/src/lib.rs`, and the
-`[programs.devnet]` entry in `Anchor.toml` all show the same address.
+Before a live hybrid test, operators must still:
 
-Deploy with explicit growth headroom. The fee payer temporarily needs enough
-SOL for both the upload buffer and ProgramData rent:
+1. connect real devnet/mainnet/Polygon RPCs;
+2. connect and provision the KMS/HSM signer roles;
+3. configure CLOB credentials and required Polymarket token approvals;
+4. register/fund the execution and settlement wallets;
+5. apply migrations and start PostgreSQL/Temporal/workers;
+6. verify that the latest local contract build matches the devnet deployment;
+7. execute a low-value allowlisted deposit and withdrawal canary.
 
-```bash
-solana program deploy \
-  --url devnet \
-  --keypair ~/.config/solana/id.json \
-  --upgrade-authority ~/.config/solana/id.json \
-  --program-id target/deploy/polybaskets_escrow-keypair.json \
-  --max-len 600000 \
-  target/deploy/polybaskets_escrow.so
-```
+The React frontend still needs to be wired to the V2 quote/intent/operation APIs
+and use a separate Solana-mainnet capital connection for deposit transactions.
+The production Composer classifier source and its full Gamma → CLOB → Composer
+integration test also remain.
 
-Do not generate a new program keypair when upgrading an already deployed
-compatible program. Use its existing program ID/keypair and upgrade authority.
+Detailed backend operations are documented in
+[`backend/README.md`](backend/README.md) and
+[`backend/docs/phase-5-6-runbook.md`](backend/docs/phase-5-6-runbook.md).
 
-### Synchronize generated IDLs
-
-After every successful build that changes the interface:
-
-```bash
-cp target/idl/polybaskets_escrow.json ../src/lib/solana/idl/polybaskets_escrow.json
-cp target/types/polybaskets_escrow.ts ../src/lib/solana/idl/polybaskets_escrow.ts
-cp target/idl/polybaskets_escrow.json ../bet-quote-service/src/idl/polybaskets_escrow.json
-cp target/idl/polybaskets_escrow.json ../settler-bot/src/idl/polybaskets_escrow.json
-```
-
-Rebuild every consumer after copying the IDL.
-
-### Initialize a fresh deployment
-
-Initialization creates Config and the canonical treasury token-account PDA.
-The first successful caller becomes admin, so initialize immediately after
-deployment from the intended governance wallet.
-
-```bash
-export ANCHOR_PROVIDER_URL=https://api.devnet.solana.com
-export ANCHOR_WALLET=~/.config/solana/id.json
-export USDC_MINT=Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr
-export ORACLE_AUTHORITY=<SETTLER_PUBLIC_KEY>
-export QUOTE_SIGNER=<QUOTE_SIGNER_PUBLIC_KEY>
-npm run initialize
-```
-
-The command aborts if Config already exists and prints the Config PDA,
-treasury USDC PDA and transaction signature on success.
-
-### Verify the deployment
-
-```bash
-solana program show <PROGRAM_ID> --url devnet
-anchor verify --provider.cluster devnet <PROGRAM_ID>
-```
-
-Then rebuild the services and exercise at least one complete devnet flow:
-create basket, stake, resolve/propose, wait 12 minutes, finalize, claim and
-sweep any remaining surplus.
-
-### Upgrade compatibility warning
-
-The current `Config`, `Basket`, and `Position` layouts are larger than the
-legacy devnet layouts. Upgrading the legacy program in place without explicit
-reallocation/migration instructions would leave old accounts unreadable. This
-version therefore targets a fresh deployment.
-
-For future upgrades:
-
-1. Compare every persistent account layout and discriminator.
-2. Add and test migration/reallocation instructions before deploying any
-   incompatible layout.
-3. Run `anchor build` and the full Bankrun suite.
-4. Back up the program keypair and upgrade-authority key securely.
-5. Deploy, verify the on-chain program authority, and run a devnet smoke test.
-
-## Admin operations
-
-Sweep a fully claimed, settled basket:
-
-```bash
-cd solana-escrow
-export ANCHOR_PROVIDER_URL=https://api.devnet.solana.com
-export ANCHOR_WALLET=~/.config/solana/id.json
-npm run sweep-surplus -- <basket-id>
-```
-
-The on-chain instruction—not the script—enforces the configured admin,
-treasury account, mint, settled status and complete claim count.
+Legacy quote-signer, settler and escrow-oriented directories may remain in the
+repository for reference, but they are not the active AlphaBasket V2 execution
+path described above.
