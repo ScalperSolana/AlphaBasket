@@ -150,8 +150,16 @@ describe("Polymarket execution adapters", () => {
       }),
       {
         signFakOrder: async (request) => ({
-          owner: "owner",
-          order: { tokenId: request.tokenId, makerAmount: request.makerAmountUnits.toString(10) },
+          serializedBody: JSON.stringify({
+            order: {
+              tokenId: request.tokenId,
+              makerAmount: request.makerAmountUnits.toString(10),
+            },
+            owner: "owner",
+            orderType: "FAK",
+            deferExec: false,
+            postOnly: false,
+          }),
           authenticationHeaders: { POLY_API_KEY: "redacted-test-key" },
         }),
       },
@@ -160,6 +168,7 @@ describe("Polymarket execution adapters", () => {
       clientOrderId: "client-1",
       tokenId: "token-1",
       side: "buy",
+      negativeRisk: false,
       amountUnits: 1_000_000n,
       worstPriceUnits: 500_000n,
     });
@@ -167,5 +176,40 @@ describe("Polymarket execution adapters", () => {
     assert.equal(result.averagePriceUnits, 500_000n);
     assert.match(postedBody, /"orderType":"FAK"/u);
     assert.match(postedBody, /"postOnly":false/u);
+  });
+
+  it("does not treat a delayed FAK response as a finalized fill", async () => {
+    const adapter = new ClobFakRestExecution(
+      new JsonHttpClient({
+        fetch: async () => new Response(JSON.stringify({
+          success: true,
+          orderID: "order-delayed",
+          status: "delayed",
+          makingAmount: "0",
+          takingAmount: "0",
+          errorMsg: "",
+        }), { status: 200 }),
+      }),
+      {
+        signFakOrder: async () => ({
+          serializedBody: JSON.stringify({
+            order: {},
+            owner: "owner",
+            orderType: "FAK",
+            deferExec: false,
+            postOnly: false,
+          }),
+          authenticationHeaders: {},
+        }),
+      },
+    );
+    await assert.rejects(adapter.executeFak({
+      clientOrderId: "client-delayed",
+      tokenId: "token-1",
+      side: "buy",
+      negativeRisk: false,
+      amountUnits: 1_000_000n,
+      worstPriceUnits: 500_000n,
+    }), /delayed/u);
   });
 });

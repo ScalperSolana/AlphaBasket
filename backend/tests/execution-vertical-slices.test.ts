@@ -37,6 +37,14 @@ const basket = new PublicKey(new Uint8Array(32).fill(4));
 const navHash = new Uint8Array(32).fill(8);
 const nowSeconds = 2_000_000_000n;
 const now = new Date(Number(nowSeconds * 1_000n));
+const walletCoordinator = Object.freeze({
+  execute: async <Result>(
+    _walletId: string,
+    _operationId: string,
+    operation: (signal: AbortSignal) => Promise<Result>,
+  ): Promise<Result> => operation(new AbortController().signal),
+});
+const executionGuard = Object.freeze({ authorize: async () => undefined });
 
 describe("execution allocation and attestations", () => {
   it("leaves allocation dust idle and liquidation dust invested", () => {
@@ -210,6 +218,8 @@ describe("deposit crash/replay safety", () => {
       } },
       { loadLatestPricing: async () => ({ navReportHash: navHash, basketNavValue: quote.basketNavValue, sharePrice: quote.sharePrice, observedAtSeconds: nowSeconds }) },
       settlement,
+      executionGuard,
+      walletCoordinator,
     );
     const prepared = await workflow.prepare({ operationId: "10000000-0000-4000-8000-000000000001", requestKey: "deposit-1", workflowId: "deposit-1", intent, polymarketWallet: `0x${"22".repeat(20)}`, now });
     const request = {
@@ -218,15 +228,16 @@ describe("deposit crash/replay safety", () => {
       workflowId: "deposit-1",
       intent,
       polymarketWallet: `0x${"22".repeat(20)}`,
+      walletId: "wallet-deposit",
       preparedBridgeAddress: prepared.bridgeAddress,
       solanaUsdcMint: new PublicKey(new Uint8Array(32).fill(9)).toBase58(),
       protocolFeeDestination: new PublicKey(new Uint8Array(32).fill(10)).toBase58(),
       fundingTransactionSignature: "solana-funding",
       maxSlippageBps: 100,
       targets: [
-        { tokenId: "a", weightBps: 4_000, worstBuyPriceUnits: 600_000n },
-        { tokenId: "b", weightBps: 3_000, worstBuyPriceUnits: 600_000n },
-        { tokenId: "c", weightBps: 3_000, worstBuyPriceUnits: 600_000n },
+        { tokenId: "a", weightBps: 4_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "b", weightBps: 3_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "c", weightBps: 3_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
       ],
       settlementNonce: 1n,
       now,
@@ -332,6 +343,8 @@ describe("withdrawal vertical slice", () => {
         },
         completeProtocolFeeWithdrawal: async () => { throw new Error("unexpected protocol redemption"); },
       },
+      executionGuard,
+      walletCoordinator,
     );
     const request = {
       operationId: "20000000-0000-4000-8000-000000000002",
@@ -339,15 +352,16 @@ describe("withdrawal vertical slice", () => {
       workflowId: "withdrawal-1",
       intent,
       polymarketWallet: `0x${"44".repeat(20)}`,
+      walletId: "wallet-withdrawal",
       totalSharesOutstanding: 100_000_000n,
       positionSharesOwned: 100_000_000n,
       positionCostBasisValue: 50_000_000n,
       weightedDepositTimestamp: nowSeconds - 2_592_000n,
       idlePusdUnits: 10_000_000n,
       targets: [
-        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 800_000n },
-        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n },
-        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n },
+        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
       ],
       performanceFeeBps: 1_000,
       maxSlippageBps: 0,
@@ -487,6 +501,8 @@ describe("protocol management-share redemption", () => {
           return { transactionSignature: "protocol-settlement", receiptAddress: "receipt", finalizedSlot: 22n };
         },
       },
+      executionGuard,
+      walletCoordinator,
     );
     const request = {
       operationId: "50000000-0000-4000-8000-000000000005",
@@ -501,12 +517,13 @@ describe("protocol management-share redemption", () => {
       totalSharesOutstanding: 100_000_000n,
       idlePusdUnits: 0n,
       targets: [
-        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 1_000_000n - 1n },
-        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n },
-        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n },
+        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
       ],
       maxSlippageBps: 0,
       polymarketWallet: `0x${"66".repeat(20)}`,
+      walletId: "wallet-protocol",
       protocolDestination: new PublicKey(new Uint8Array(32).fill(19)).toBase58(),
       solanaSettlementReceiver: new PublicKey(new Uint8Array(32).fill(20)).toBase58(),
       solanaUsdcMint: new PublicKey(new Uint8Array(32).fill(21)).toBase58(),

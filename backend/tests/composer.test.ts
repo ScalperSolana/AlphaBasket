@@ -140,7 +140,12 @@ describe("deterministic Composer", () => {
       {
         createBasket: async (request) => {
           captured = request;
-          return { basketAddress: "basket", transactionSignature: "signature" };
+          return {
+            basketAddress: "basket",
+            transactionSignature: "signature",
+            compositionHash: request.payload.composition.hash,
+            portfolioItems: [],
+          };
         },
       },
       { nowMs: () => NOW_MS },
