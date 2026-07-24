@@ -111,6 +111,20 @@ export class AnchorBasketCreationGateway
     return Object.freeze({
       basketAddress: basket.toBase58(),
       transactionSignature,
+      compositionHash: request.payload.composition.hash,
+      portfolioItems: Object.freeze(
+        request.payload.composition.items.map((item) =>
+          Object.freeze({
+            marketId: item.marketId,
+            conditionId: item.conditionId,
+            tokenId: item.tokenId,
+            outcome: item.outcomeLabel,
+            initialMarkPriceUnits: item.initialMarkPriceUnits,
+            markObservedAtMs: request.payload.composition.composedAtMs,
+            markSourceHash: `composer:${request.payload.composition.auditHash}:${item.tokenId}`,
+          }),
+        ),
+      ),
     });
   }
 }

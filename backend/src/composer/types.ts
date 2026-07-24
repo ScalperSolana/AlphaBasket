@@ -74,6 +74,8 @@ export interface WeightedCompositionItem {
   readonly outcomeLabel: string;
   readonly outcomeIndex: 0 | 1;
   readonly weightBps: number;
+  /** Initial off-chain mark only; it is not signed into the on-chain composition. */
+  readonly initialMarkPriceUnits: bigint;
   /** Audit-only score; it is not raw market data submitted to Solana. */
   readonly score: bigint;
 }
@@ -127,6 +129,17 @@ export interface SolanaBasketCreationRequest {
 export interface SolanaBasketCreationResult {
   readonly basketAddress: string;
   readonly transactionSignature: string;
+  readonly compositionHash: string;
+  /** Off-chain execution metadata used to initialize the basket portfolio projection. */
+  readonly portfolioItems: readonly Readonly<{
+    readonly marketId: string;
+    readonly conditionId: string;
+    readonly tokenId: string;
+    readonly outcome: string;
+    readonly initialMarkPriceUnits: bigint;
+    readonly markObservedAtMs: bigint;
+    readonly markSourceHash: string;
+  }>[];
 }
 
 export interface SolanaBasketCreationGatewayPort {

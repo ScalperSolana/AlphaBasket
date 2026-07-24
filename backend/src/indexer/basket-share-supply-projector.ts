@@ -29,7 +29,7 @@ export class BasketShareSupplyAccountProjector
   ): Promise<void> {
     await this.accounts.applySnapshotMonotonic(programId, sourceSlot, records);
     for (const record of records) {
-      if (record.kind !== "basket") continue;
+      if (record.kind !== "Basket") continue;
       const totalSharesUnits = decimalBigint(
         record.data.totalSharesOutstanding,
         "totalSharesOutstanding",

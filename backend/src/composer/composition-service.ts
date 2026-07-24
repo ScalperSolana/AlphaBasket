@@ -128,6 +128,7 @@ export class BasketCompositionService {
           outcomeLabel: entry.candidate.outcomeLabel,
           outcomeIndex: entry.candidate.outcomeIndex,
           weightBps,
+          initialMarkPriceUnits: entry.candidate.midpointPriceUnits,
           score: entry.score,
         });
       })

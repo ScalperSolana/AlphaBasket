@@ -5,6 +5,7 @@ export interface ExecutionWalletDescriptor {
   readonly polygonAddress: string;
   readonly shard: string;
   readonly status: ExecutionWalletStatus;
+  readonly maxConcurrentOperations?: number;
 }
 
 export interface ExecutionWalletRegistryPort {
@@ -35,4 +36,34 @@ export interface WalletSelectionStrategyPort {
 
 export interface WalletClockPort {
   nowMs(): bigint;
+}
+
+export interface WalletOperationLease {
+  readonly walletId: string;
+  readonly operationId: string;
+  readonly ownerId: string;
+  readonly token: string;
+  readonly acquiredAt: Date;
+  readonly expiresAt: Date;
+}
+
+export interface WalletOperationLeaseStorePort {
+  tryAcquire(request: {
+    readonly walletId: string;
+    readonly operationId: string;
+    readonly ownerId: string;
+    readonly now: Date;
+    readonly durationMs: number;
+  }): Promise<WalletOperationLease | null>;
+  renew(lease: WalletOperationLease, now: Date, durationMs: number): Promise<WalletOperationLease | null>;
+  release(lease: WalletOperationLease): Promise<boolean>;
+}
+
+/** Serializes side-effecting work for one attributed execution wallet. */
+export interface WalletExecutionCoordinatorPort {
+  execute<Result>(
+    walletId: string,
+    operationId: string,
+    operation: (signal: AbortSignal) => Promise<Result>,
+  ): Promise<Result>;
 }

@@ -3,6 +3,9 @@ export type MarkCondition = "fresh" | "stale" | "illiquid" | "unavailable";
 export interface BasketAttributedHolding {
   readonly marketId: string;
   readonly tokenId: string;
+  /** Off-chain execution metadata; intentionally not part of the Solana composition account. */
+  readonly conditionId?: string;
+  readonly negativeRisk?: boolean;
   readonly outcome: string;
   readonly quantityUnits: bigint;
   readonly markPriceUnits: bigint;

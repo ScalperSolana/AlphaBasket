@@ -10,6 +10,10 @@ import type {
   NavSnapshot,
   NavSnapshotStorePort,
 } from "./types.js";
+import type {
+  BasketHoldingMarkWriterPort,
+  NavBasketRegistryPort,
+} from "./mark-refresh-service.js";
 
 interface PortfolioStateRow extends Record<string, unknown> {
   basket_id: string;
@@ -22,6 +26,8 @@ interface PortfolioStateRow extends Record<string, unknown> {
 interface HoldingRow extends Record<string, unknown> {
   market_id: string;
   token_id: string;
+  condition_id: string | null;
+  negative_risk: boolean | null;
   outcome: string;
   quantity_units: string;
   mark_price_units: string;
@@ -103,7 +109,7 @@ export class PostgresBasketAttributedHoldings
           throw new Error(`portfolio state not found for basket ${basketId}`);
         }
         const holdingResult = await transaction.query<HoldingRow>(
-          `SELECT market_id, token_id, outcome,
+          `SELECT market_id, token_id, condition_id, negative_risk, outcome,
                   quantity_units::text AS quantity_units,
                   mark_price_units::text AS mark_price_units,
                   price_scale::text AS price_scale,
@@ -119,6 +125,8 @@ export class PostgresBasketAttributedHoldings
             Object.freeze({
               marketId: row.market_id,
               tokenId: row.token_id,
+              ...(row.condition_id === null ? {} : { conditionId: row.condition_id }),
+              ...(row.negative_risk === null ? {} : { negativeRisk: row.negative_risk }),
               outcome: row.outcome,
               quantityUnits: parseInteger(row.quantity_units, "quantity_units"),
               markPriceUnits: parseInteger(row.mark_price_units, "mark_price_units"),
@@ -295,5 +303,84 @@ export class PostgresNavSnapshotStore implements NavSnapshotStorePort {
         `conflicting NAV snapshot at ${snapshot.basketId}/${snapshot.sequence.toString()}`,
       );
     }
+  }
+}
+
+export class PostgresNavBasketRegistry implements NavBasketRegistryPort {
+  public constructor(private readonly sql: SqlClient) {}
+
+  public async listBasketIds(limit: number): Promise<readonly string[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new RangeError("NAV basket scan limit must be between 1 and 10000");
+    }
+    const result = await this.sql.query<{ basket_id: string }>(
+      `SELECT p.basket_id
+       FROM basket_portfolio_states p
+       JOIN basket_share_supply_projections s ON s.basket_id = p.basket_id
+       ORDER BY p.basket_id
+       LIMIT $1`,
+      [limit],
+    );
+    return Object.freeze(result.rows.map((row) => row.basket_id));
+  }
+}
+
+export class PostgresBasketHoldingMarkWriter
+  implements BasketHoldingMarkWriterPort
+{
+  public constructor(private readonly sql: SqlClient) {}
+
+  public async updateMarks(
+    basketId: string,
+    marks: readonly Readonly<{
+      marketId: string;
+      tokenId: string;
+      outcome: string;
+      priceUnits: bigint;
+      priceScale: bigint;
+      observedAtMs: bigint;
+      sourceHash: string;
+      condition: MarkCondition;
+    }>[],
+    now: Date,
+  ): Promise<void> {
+    await this.sql.transaction(async (transaction) => {
+      for (const mark of marks) {
+        if (
+          mark.priceUnits < 0n ||
+          mark.priceScale <= 0n ||
+          mark.priceUnits > mark.priceScale ||
+          mark.observedAtMs < 0n
+        ) {
+          throw new RangeError("CLOB mark is outside its fixed-point bounds");
+        }
+        const result = await transaction.query(
+          `UPDATE basket_holding_projections
+           SET mark_price_units = $5::numeric,
+               price_scale = $6::numeric,
+               mark_observed_at_ms = $7::numeric,
+               mark_source_hash = $8,
+               mark_condition = $9,
+               updated_at = $10
+           WHERE basket_id = $1 AND market_id = $2
+             AND token_id = $3 AND outcome = $4`,
+          [
+            basketId,
+            mark.marketId,
+            mark.tokenId,
+            mark.outcome,
+            mark.priceUnits.toString(10),
+            mark.priceScale.toString(10),
+            mark.observedAtMs.toString(10),
+            mark.sourceHash,
+            mark.condition,
+            now,
+          ],
+        );
+        if (result.rowCount !== 1) {
+          throw new Error(`attributed holding disappeared while refreshing ${mark.tokenId}`);
+        }
+      }
+    }, { isolation: "repeatable read" });
   }
 }

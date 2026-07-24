@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { Pool } from "pg";
 
-import { loadBackendConfig } from "../config/env.js";
+import { loadMigrationConfig } from "../config/env.js";
 
 const MIGRATION_LOCK_ID = 1_441_702_612;
 
@@ -15,7 +15,7 @@ function sha256(value: string): string {
 }
 
 async function run(): Promise<void> {
-  const config = loadBackendConfig();
+  const config = loadMigrationConfig();
   const pool = new Pool({ connectionString: config.databaseUrl, max: 1 });
   const client = await pool.connect();
 

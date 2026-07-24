@@ -12,6 +12,7 @@ interface WalletRow extends Record<string, unknown> {
   polygon_address: string;
   shard: string;
   status: ExecutionWalletStatus;
+  max_concurrent_operations: number;
 }
 
 interface AssignmentRow extends Record<string, unknown> {
@@ -38,7 +39,7 @@ export class PostgresExecutionWalletRegistry
 
   public async listWallets(): Promise<readonly ExecutionWalletDescriptor[]> {
     const result = await this.sql.query<WalletRow>(
-      `SELECT wallet_id, polygon_address, shard, status
+      `SELECT wallet_id, polygon_address, shard, status, max_concurrent_operations
        FROM execution_wallets ORDER BY wallet_id`,
     );
     return Object.freeze(
@@ -48,6 +49,7 @@ export class PostgresExecutionWalletRegistry
           polygonAddress: row.polygon_address,
           shard: row.shard,
           status: row.status,
+          maxConcurrentOperations: row.max_concurrent_operations,
         }),
       ),
     );
