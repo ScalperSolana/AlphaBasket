@@ -34,6 +34,18 @@ pub enum EscrowError {
     InvalidBasketWeights,
     #[msg("A basket item exceeds the per-market weight cap")]
     MarketWeightExceeded,
+    #[msg("Selected prediction market is absent from the signed eligibility list")]
+    MarketNotEligible,
+    #[msg("Eligibility list is malformed, stale, or does not match its hash")]
+    InvalidEligibilityList,
+    #[msg("Spot token is not enabled in the on-chain allowlist")]
+    TokenNotAllowlisted,
+    #[msg("Token allowlist metadata is invalid")]
+    InvalidTokenMetadata,
+    #[msg("Signed spot-price attestation is malformed, stale, or unsupported")]
+    InvalidPriceAttestation,
+    #[msg("Spot-price attestation nonce must increase")]
+    PriceAttestationNonceNotIncreasing,
     #[msg("Basket status does not allow this action")]
     InvalidBasketStatus,
     #[msg("Only perpetual baskets can be reconstituted")]
@@ -52,10 +64,6 @@ pub enum EscrowError {
     IntentNonceMismatch,
     #[msg("Position belongs to a different basket or user")]
     PositionMismatch,
-    #[msg("This deposit would exceed the 10,000 USDC basket cap")]
-    BasketDepositLimitExceeded,
-    #[msg("This deposit would exceed the 500 USDC per-user basket cap")]
-    UserDepositLimitExceeded,
     #[msg("Insufficient shares")]
     InsufficientShares,
     #[msg("The initial $1 share price has already been consumed")]

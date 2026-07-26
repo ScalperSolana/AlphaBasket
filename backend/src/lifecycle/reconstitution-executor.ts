@@ -229,8 +229,16 @@ export class PolymarketReconstitutionExecutor implements ReconstitutionExecution
     if (state.compositionVersion !== BigInt(request.previousCompositionVersion)) throw new Error("portfolio composition version is stale");
 
     const targetByToken = new Map(request.nextComposition.items.map((item) => {
+      if (!("predictionMarket" in item.kind)) {
+        throw new Error(
+          "Polymarket reconstitution executor cannot execute Jupiter spot legs",
+        );
+      }
       const tokenId = tokenIdFromBytes(item.kind.predictionMarket.ctfTokenId);
-      return [tokenId, { item, tokenId }] as const;
+      return [
+        tokenId,
+        { item, tokenId, outcome: item.kind.predictionMarket.outcome },
+      ] as const;
     }));
     const tokens = [...new Set([...state.holdings.map((holding) => holding.tokenId), ...targetByToken.keys()])].sort();
     let storedPlan = await this.executions.loadPlan(request.operationId, hash);
@@ -356,7 +364,7 @@ export class PolymarketReconstitutionExecutor implements ReconstitutionExecution
         tokenId,
         conditionId,
         negativeRisk: view.negativeRisk,
-        outcome: target === undefined ? original?.outcome ?? "unknown" : String(target.item.kind.predictionMarket.outcome),
+        outcome: target === undefined ? original?.outcome ?? "unknown" : String(target.outcome),
         quantityUnits,
         markPriceUnits: view.midpoint,
         priceScale: PRICE_SCALE,

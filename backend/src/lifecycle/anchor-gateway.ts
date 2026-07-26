@@ -2,13 +2,18 @@ import type { Program } from "@coral-xyz/anchor";
 import {
   Ed25519Program,
   PublicKey,
+  SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
 } from "@solana/web3.js";
 
 import {
   ALPHABASKET_PROGRAM_ID,
   compositionHash as hashComposition,
+  deriveCompositionDraftPda,
   deriveConfigPda,
+  deriveEligibilityListPda,
+  deriveTokenAllowlistPda,
+  eligibilityHash as hashEligibility,
   reconstitutionAuthorizationMessage,
 } from "../contract/index.js";
 import type { PolybasketsEscrow } from "../contract/generated/polybaskets_escrow.js";
@@ -108,10 +113,20 @@ export class AnchorLifecycleGateway implements LifecycleSolanaGatewayPort {
     if (!expectedCompositionHash.equals(Buffer.from(suppliedCompositionHash))) {
       throw new Error("reconstitution composition hash does not match its items");
     }
+    const expectedEligibilityHash = hashEligibility(request.eligibleMarkets);
+    const suppliedEligibilityHash = requireBytes(
+      request.eligibilityHash,
+      32,
+      "eligibilityHash",
+    );
+    if (!expectedEligibilityHash.equals(Buffer.from(suppliedEligibilityHash))) {
+      throw new Error("reconstitution eligibility hash does not match its markets");
+    }
     const expectedMessage = reconstitutionAuthorizationMessage({
       basketId: request.basketId,
       nextCompositionVersion: request.nextCompositionVersion,
-      compositionHash: suppliedCompositionHash,
+      eligibilityHash: suppliedEligibilityHash,
+      eligibilityNonce: request.eligibilityNonce,
       compositionNonce: request.compositionNonce,
       compositionExpiry: request.compositionExpirySeconds,
       programId: this.program.programId,
@@ -125,27 +140,119 @@ export class AnchorLifecycleGateway implements LifecycleSolanaGatewayPort {
       message: encodedMessage,
       signature,
     });
-    const instruction = await this.program.methods.completeReconstitution({
+    const [eligibilityList] = deriveEligibilityListPda(
+      suppliedEligibilityHash,
+      request.eligibilityNonce,
+      this.program.programId,
+    );
+    const existingEligibility =
+      await this.program.provider.connection.getAccountInfo(
+        eligibilityList,
+        "confirmed",
+      );
+    if (existingEligibility === null) {
+      const publish = await this.program.methods
+        .publishEligibilityList({
+          listHash: [...suppliedEligibilityHash],
+          nonce: request.eligibilityNonce,
+          expiresAt: request.compositionExpirySeconds,
+          markets: request.eligibleMarkets.map((market) => ({
+            marketId: market.marketId,
+            outcome: market.outcome,
+            ctfTokenId: [...requireBytes(market.ctfTokenId, 32, "eligible ctfTokenId")],
+          })),
+        })
+        .accountsStrict({
+          config: this.config,
+          eligibilityList,
+          composerSigner,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+      await this.submitter.submit(Object.freeze({
+        operationKey: `${operationKey}:eligibility`,
+        instructions: Object.freeze([publish]),
+        requiredSignerPublicKeys: Object.freeze([composerSigner]),
+      }));
+    } else if (!existingEligibility.owner.equals(this.program.programId)) {
+      throw new Error("reconstitution eligibility PDA has an unexpected owner");
+    }
+    const hasSpot = request.items.some((item) => "spot" in item.kind);
+    const spotAllowlistAccounts = hasSpot
+      ? [{
+          pubkey: deriveTokenAllowlistPda(this.program.programId)[0],
+          isSigner: false,
+          isWritable: false,
+        }]
+      : [];
+    const [compositionDraft] = deriveCompositionDraftPda(
+      suppliedCompositionHash,
+      request.compositionNonce,
+      this.program.programId,
+    );
+    const existingDraft =
+      await this.program.provider.connection.getAccountInfo(
+        compositionDraft,
+        "confirmed",
+      );
+    if (existingDraft === null) {
+      let draftBuilder = this.program.methods
+        .publishCompositionDraft({
+          compositionHash: [...suppliedCompositionHash],
+          eligibilityHash: [...suppliedEligibilityHash],
+          eligibilityNonce: request.eligibilityNonce,
+          compositionNonce: request.compositionNonce,
+          items: request.items.map((item) => ({
+            marketId: item.marketId,
+            kind:
+              "predictionMarket" in item.kind
+                ? {
+                    predictionMarket: {
+                      outcome: item.kind.predictionMarket.outcome,
+                      ctfTokenId: [...item.kind.predictionMarket.ctfTokenId],
+                    },
+                  }
+                : { spot: { tokenMint: item.kind.spot.tokenMint } },
+            weightBps: item.weightBps,
+          })),
+        })
+        .accountsStrict({
+          config: this.config,
+          compositionDraft,
+          eligibilityList,
+          composerSigner,
+          systemProgram: SystemProgram.programId,
+        });
+      if (spotAllowlistAccounts.length > 0) {
+        draftBuilder = draftBuilder.remainingAccounts(spotAllowlistAccounts);
+      }
+      await this.submitter.submit(Object.freeze({
+        operationKey: `${operationKey}:composition-draft`,
+        instructions: Object.freeze([await draftBuilder.instruction()]),
+        requiredSignerPublicKeys: Object.freeze([composerSigner]),
+      }));
+    } else if (!existingDraft.owner.equals(this.program.programId)) {
+      throw new Error("reconstitution composition-draft PDA has an unexpected owner");
+    }
+    let completionBuilder = this.program.methods.completeReconstitution({
       compositionHash: [...requireBytes(request.compositionHash, 32, "compositionHash")],
-      items: request.items.map((item) => ({
-        marketId: item.marketId,
-        kind: {
-          predictionMarket: {
-            outcome: item.kind.predictionMarket.outcome,
-            ctfTokenId: [...requireBytes(item.kind.predictionMarket.ctfTokenId, 32, "ctfTokenId")],
-          },
-        },
-        weightBps: item.weightBps,
-      })),
+      eligibilityHash: [...suppliedEligibilityHash],
+      eligibilityNonce: request.eligibilityNonce,
       compositionNonce: request.compositionNonce,
       compositionExpiry: request.compositionExpirySeconds,
     }).accountsStrict({
       config: this.config,
       basket: request.basket,
+      compositionDraft,
+      eligibilityList,
       backendSigner: this.options.backendSigner,
       composerSigner,
       ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-    }).instruction();
+    });
+    if (spotAllowlistAccounts.length > 0) {
+      completionBuilder = completionBuilder.remainingAccounts(spotAllowlistAccounts);
+    }
+    const instruction = await completionBuilder.instruction();
     return this.submitter.submit(Object.freeze({
       operationKey,
       instructions: Object.freeze([verify, instruction]),

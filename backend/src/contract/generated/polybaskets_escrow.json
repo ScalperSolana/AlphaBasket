@@ -595,6 +595,74 @@
           }
         },
         {
+          "name": "composition_draft",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibility_list",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
           "name": "backend_signer",
           "signer": true,
           "relations": [
@@ -821,6 +889,74 @@
           }
         },
         {
+          "name": "composition_draft",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibility_list",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
           "name": "composer_signer",
           "writable": true,
           "signer": true,
@@ -962,6 +1098,223 @@
       ]
     },
     {
+      "name": "publish_composition_draft",
+      "docs": [
+        "Publishes a creator-selected weighted composition in a size-safe prior transaction."
+      ],
+      "discriminator": [
+        25,
+        204,
+        60,
+        116,
+        175,
+        6,
+        255,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "composition_draft",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibility_list",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composer_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "PublishCompositionDraftArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "publish_eligibility_list",
+      "docs": [
+        "Publishes a short-lived Composer-screened prediction-market list."
+      ],
+      "discriminator": [
+        90,
+        36,
+        193,
+        106,
+        49,
+        100,
+        73,
+        83
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibility_list",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.list_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composer_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "PublishEligibilityListArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "record_final_settlement",
       "docs": [
         "Records the final NAV and share snapshot for deterministic redemptions."
@@ -1033,6 +1386,92 @@
           "type": {
             "defined": {
               "name": "FinalSettlementArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_token",
+      "docs": [
+        "Adds, updates, disables, or re-enables a Jupiter spot-token allowlist entry."
+      ],
+      "discriminator": [
+        32,
+        146,
+        36,
+        240,
+        80,
+        183,
+        36,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_allowlist",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  95,
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RegisterTokenArgs"
             }
           }
         }
@@ -1201,6 +1640,129 @@
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "submit_price_attestation",
+      "docs": [
+        "Records a fresh Composer-signed TWAP for a signed-fallback spot token."
+      ],
+      "discriminator": [
+        4,
+        29,
+        113,
+        80,
+        88,
+        153,
+        24,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_allowlist",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  95,
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_attestation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composer_signer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "SubmitPriceAttestationArgs"
+            }
+          }
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1218,6 +1780,19 @@
       ]
     },
     {
+      "name": "CompositionDraft",
+      "discriminator": [
+        229,
+        119,
+        58,
+        168,
+        134,
+        105,
+        155,
+        89
+      ]
+    },
+    {
       "name": "Config",
       "discriminator": [
         155,
@@ -1228,6 +1803,19 @@
         250,
         204,
         130
+      ]
+    },
+    {
+      "name": "EligibilityList",
+      "discriminator": [
+        246,
+        60,
+        135,
+        157,
+        45,
+        199,
+        223,
+        164
       ]
     },
     {
@@ -1244,6 +1832,19 @@
       ]
     },
     {
+      "name": "PriceAttestation",
+      "discriminator": [
+        14,
+        221,
+        251,
+        189,
+        238,
+        210,
+        139,
+        75
+      ]
+    },
+    {
       "name": "SettlementReceipt",
       "discriminator": [
         52,
@@ -1254,6 +1855,19 @@
         232,
         187,
         4
+      ]
+    },
+    {
+      "name": "TokenAllowlist",
+      "discriminator": [
+        153,
+        168,
+        129,
+        66,
+        180,
+        22,
+        0,
+        239
       ]
     }
   ],
@@ -1350,6 +1964,19 @@
       ]
     },
     {
+      "name": "CompositionDraftPublished",
+      "discriminator": [
+        126,
+        168,
+        91,
+        172,
+        81,
+        218,
+        54,
+        128
+      ]
+    },
+    {
       "name": "ConfigInitialized",
       "discriminator": [
         181,
@@ -1373,6 +2000,19 @@
         147,
         84,
         58
+      ]
+    },
+    {
+      "name": "EligibilityListPublished",
+      "discriminator": [
+        83,
+        75,
+        82,
+        229,
+        241,
+        90,
+        84,
+        240
       ]
     },
     {
@@ -1428,6 +2068,19 @@
       ]
     },
     {
+      "name": "PriceAttestationSubmitted",
+      "discriminator": [
+        69,
+        65,
+        9,
+        61,
+        104,
+        145,
+        192,
+        154
+      ]
+    },
+    {
       "name": "ProtocolFeeSharesWithdrawn",
       "discriminator": [
         68,
@@ -1438,6 +2091,19 @@
         210,
         142,
         244
+      ]
+    },
+    {
+      "name": "TokenAllowlistUpdated",
+      "discriminator": [
+        62,
+        137,
+        236,
+        201,
+        142,
+        26,
+        158,
+        148
       ]
     },
     {
@@ -1537,146 +2203,166 @@
     },
     {
       "code": 6016,
+      "name": "MarketNotEligible",
+      "msg": "Selected prediction market is absent from the signed eligibility list"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidEligibilityList",
+      "msg": "Eligibility list is malformed, stale, or does not match its hash"
+    },
+    {
+      "code": 6018,
+      "name": "TokenNotAllowlisted",
+      "msg": "Spot token is not enabled in the on-chain allowlist"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidTokenMetadata",
+      "msg": "Token allowlist metadata is invalid"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidPriceAttestation",
+      "msg": "Signed spot-price attestation is malformed, stale, or unsupported"
+    },
+    {
+      "code": 6021,
+      "name": "PriceAttestationNonceNotIncreasing",
+      "msg": "Spot-price attestation nonce must increase"
+    },
+    {
+      "code": 6022,
       "name": "InvalidBasketStatus",
       "msg": "Basket status does not allow this action"
     },
     {
-      "code": 6017,
+      "code": 6023,
       "name": "BasketNotPerpetual",
       "msg": "Only perpetual baskets can be reconstituted"
     },
     {
-      "code": 6018,
+      "code": 6024,
       "name": "MissingIntentSignature",
       "msg": "User intent signature instruction is missing"
     },
     {
-      "code": 6019,
+      "code": 6025,
       "name": "MalformedIntentSignature",
       "msg": "User intent signature instruction is malformed"
     },
     {
-      "code": 6020,
+      "code": 6026,
       "name": "UnauthorizedIntentSigner",
       "msg": "Intent signature was produced by the wrong user"
     },
     {
-      "code": 6021,
+      "code": 6027,
       "name": "IntentSignatureMismatch",
       "msg": "Signed user intent does not match the completion"
     },
     {
-      "code": 6022,
+      "code": 6028,
       "name": "IntentExpired",
       "msg": "User intent has expired"
     },
     {
-      "code": 6023,
+      "code": 6029,
       "name": "IntentNonceMismatch",
       "msg": "User intent nonce must be exactly the next position nonce"
     },
     {
-      "code": 6024,
+      "code": 6030,
       "name": "PositionMismatch",
       "msg": "Position belongs to a different basket or user"
     },
     {
-      "code": 6025,
-      "name": "BasketDepositLimitExceeded",
-      "msg": "This deposit would exceed the 10,000 USDC basket cap"
-    },
-    {
-      "code": 6026,
-      "name": "UserDepositLimitExceeded",
-      "msg": "This deposit would exceed the 500 USDC per-user basket cap"
-    },
-    {
-      "code": 6027,
+      "code": 6031,
       "name": "InsufficientShares",
       "msg": "Insufficient shares"
     },
     {
-      "code": 6028,
+      "code": 6032,
       "name": "SharePriceAlreadyInitialized",
       "msg": "The initial $1 share price has already been consumed"
     },
     {
-      "code": 6029,
+      "code": 6033,
       "name": "CompositionVersionMismatch",
       "msg": "Completion uses a stale composition version"
     },
     {
-      "code": 6030,
+      "code": 6034,
       "name": "FeeMismatch",
       "msg": "Protocol fee does not match basket rules"
     },
     {
-      "code": 6031,
+      "code": 6035,
       "name": "SlippageExceeded",
       "msg": "Settlement result exceeds the protocol or user slippage limit"
     },
     {
-      "code": 6032,
+      "code": 6036,
       "name": "InvalidMinimumOutput",
       "msg": "Minimum output does not enforce the requested slippage tolerance"
     },
     {
-      "code": 6033,
+      "code": 6037,
       "name": "InvalidSettlementValues",
       "msg": "Settlement values are internally inconsistent"
     },
     {
-      "code": 6034,
+      "code": 6038,
       "name": "ShareArithmeticMismatch",
       "msg": "Credited shares do not match net value and share price"
     },
     {
-      "code": 6035,
+      "code": 6039,
       "name": "SharePriceMismatch",
       "msg": "Share price does not match the supplied basket NAV and outstanding shares"
     },
     {
-      "code": 6036,
+      "code": 6040,
       "name": "SettlementNonceNotIncreasing",
       "msg": "Settlement nonce must increase for every basket completion"
     },
     {
-      "code": 6037,
+      "code": 6041,
       "name": "CompositionNonceNotIncreasing",
       "msg": "Composition nonce must increase for every basket composition"
     },
     {
-      "code": 6038,
+      "code": 6042,
       "name": "FinalSnapshotMismatch",
       "msg": "Final settlement snapshot does not match outstanding shares"
     },
     {
-      "code": 6039,
+      "code": 6043,
       "name": "CreatorFeeMismatch",
       "msg": "Creator performance fee does not match realized profit"
     },
     {
-      "code": 6040,
+      "code": 6044,
       "name": "ManagementFeeCatchUpTooLarge",
       "msg": "Management-fee catch-up exceeds the supported safety bound"
     },
     {
-      "code": 6041,
+      "code": 6045,
       "name": "InvalidExecutionVersion",
       "msg": "Execution batch uses an unsupported encoding version"
     },
     {
-      "code": 6042,
+      "code": 6046,
       "name": "InvalidExecutionTimestamp",
       "msg": "Execution timestamp must be a valid past or current Unix timestamp"
     },
     {
-      "code": 6043,
+      "code": 6047,
       "name": "InsufficientProtocolFeeShares",
       "msg": "Requested protocol fee shares exceed the accrued balance"
     },
     {
-      "code": 6044,
+      "code": 6048,
       "name": "MathOverflow",
       "msg": "Arithmetic overflow or underflow"
     }
@@ -1726,6 +2412,67 @@
           {
             "name": "pending_admin",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AllowedToken",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jupiter_verified",
+            "type": "bool"
+          },
+          {
+            "name": "asset_class",
+            "type": {
+              "defined": {
+                "name": "TokenAssetClass"
+              }
+            }
+          },
+          {
+            "name": "availability",
+            "type": {
+              "defined": {
+                "name": "TradingAvailability"
+              }
+            }
+          },
+          {
+            "name": "price_source",
+            "type": {
+              "defined": {
+                "name": "SpotPriceSource"
+              }
+            }
+          },
+          {
+            "name": "backing_attestation_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
           }
         ]
       }
@@ -2301,6 +3048,109 @@
       }
     },
     {
+      "name": "CompositionDraft",
+      "docs": [
+        "Composer-published creator selection. Splitting variable-size items into a",
+        "prior transaction keeps create/reconstitution transactions under Solana's",
+        "packet limit without weakening Ed25519 authorization."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "published_at",
+            "type": "i64"
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "BasketAsset"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CompositionDraftPublished",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "composition_draft",
+            "type": "pubkey"
+          },
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "item_count",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
       "name": "Config",
       "docs": [
         "Singleton protocol configuration and authority registry."
@@ -2404,14 +3254,17 @@
             }
           },
           {
-            "name": "items",
+            "name": "eligibility_hash",
             "type": {
-              "vec": {
-                "defined": {
-                  "name": "BasketAsset"
-                }
-              }
+              "array": [
+                "u8",
+                32
+              ]
             }
+          },
+          {
+            "name": "eligibility_nonce",
+            "type": "u64"
           },
           {
             "name": "creator",
@@ -2500,6 +3353,118 @@
           {
             "name": "protocol_fee",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EligibilityList",
+      "docs": [
+        "Short-lived Composer-published market list used by basket creation/reconstitution."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "list_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "published_at",
+            "type": "i64"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "EligibleMarket"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EligibilityListPublished",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "eligibility_list",
+            "type": "pubkey"
+          },
+          {
+            "name": "list_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "market_count",
+            "type": "u16"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EligibleMarket",
+      "docs": [
+        "One prediction market admitted by the Composer's unchanged six-point screen.",
+        "Weights are deliberately absent: creators choose them after eligibility is signed."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market_id",
+            "type": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "ctf_token_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -2733,6 +3698,124 @@
                 }
               }
             ]
+          },
+          {
+            "name": "Spot",
+            "fields": [
+              {
+                "name": "token_mint",
+                "type": "pubkey"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceAttestation",
+      "docs": [
+        "Latest Composer-signed TWAP fallback for a token without a robust oracle."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_value",
+            "docs": [
+              "Six-decimal settlement-value price, matching the accounting engine."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "confidence_bps",
+            "type": "u16"
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "attestation_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceAttestationSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "price_attestation",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_value",
+            "type": "u64"
+          },
+          {
+            "name": "confidence_bps",
+            "type": "u16"
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "attestation_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -2779,6 +3862,85 @@
       }
     },
     {
+      "name": "PublishCompositionDraftArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "composition_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibility_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composition_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "BasketAsset"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PublishEligibilityListArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "list_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "EligibleMarket"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "ReconstitutionArgs",
       "docs": [
         "Composer-authorized replacement composition."
@@ -2796,14 +3958,17 @@
             }
           },
           {
-            "name": "items",
+            "name": "eligibility_hash",
             "type": {
-              "vec": {
-                "defined": {
-                  "name": "BasketAsset"
-                }
-              }
+              "array": [
+                "u8",
+                32
+              ]
             }
+          },
+          {
+            "name": "eligibility_nonce",
+            "type": "u64"
           },
           {
             "name": "composition_nonce",
@@ -2812,6 +3977,59 @@
           {
             "name": "composition_expiry",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RegisterTokenArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jupiter_verified",
+            "type": "bool"
+          },
+          {
+            "name": "asset_class",
+            "type": {
+              "defined": {
+                "name": "TokenAssetClass"
+              }
+            }
+          },
+          {
+            "name": "availability",
+            "type": {
+              "defined": {
+                "name": "TradingAvailability"
+              }
+            }
+          },
+          {
+            "name": "price_source",
+            "type": {
+              "defined": {
+                "name": "SpotPriceSource"
+              }
+            }
+          },
+          {
+            "name": "backing_attestation_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
           }
         ]
       }
@@ -2966,6 +4184,170 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SpotPriceSource",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Pyth",
+            "fields": [
+              {
+                "name": "feed_id",
+                "type": {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "Switchboard",
+            "fields": [
+              {
+                "name": "feed",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "SignedTwap"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SubmitPriceAttestationArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_value",
+            "type": "u64"
+          },
+          {
+            "name": "confidence_bps",
+            "type": "u16"
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenAllowlist",
+      "docs": [
+        "Admin-maintained spot-token registry. Disabling an entry blocks new",
+        "compositions but never changes or liquidates an existing basket."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "registered_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokens",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "AllowedToken"
+                }
+              }
+            }
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenAllowlistUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_allowlist",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "jupiter_verified",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenAssetClass",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Crypto"
+          },
+          {
+            "name": "TokenizedEquity"
+          },
+          {
+            "name": "Other"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TradingAvailability",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "TwentyFourSeven"
+          },
+          {
+            "name": "TwentyFourFive"
           }
         ]
       }

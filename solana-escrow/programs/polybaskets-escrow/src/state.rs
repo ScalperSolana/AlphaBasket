@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{MAX_BASKET_ITEMS, MAX_MARKET_ID_LEN, POSITION_RESERVED_BYTES};
+use crate::constants::{
+    MAX_ALLOWLISTED_TOKENS, MAX_BASKET_ITEMS, MAX_ELIGIBLE_MARKETS, MAX_MARKET_ID_LEN,
+    POSITION_RESERVED_BYTES, REGISTRY_RESERVED_BYTES,
+};
 
 #[account]
 #[derive(InitSpace)]
@@ -47,6 +50,7 @@ pub enum WithdrawalKind {
 /// Tagged representation of a supported basket position.
 pub enum PositionKind {
     PredictionMarket { outcome: u8, ctf_token_id: [u8; 32] },
+    Spot { token_mint: Pubkey },
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
@@ -56,6 +60,110 @@ pub struct BasketAsset {
     pub market_id: String,
     pub kind: PositionKind,
     pub weight_bps: u16,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
+/// One prediction market admitted by the Composer's unchanged six-point screen.
+/// Weights are deliberately absent: creators choose them after eligibility is signed.
+pub struct EligibleMarket {
+    #[max_len(MAX_MARKET_ID_LEN)]
+    pub market_id: String,
+    pub outcome: u8,
+    pub ctf_token_id: [u8; 32],
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Short-lived Composer-published market list used by basket creation/reconstitution.
+pub struct EligibilityList {
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub composer: Pubkey,
+    pub published_at: i64,
+    pub expires_at: i64,
+    #[max_len(MAX_ELIGIBLE_MARKETS)]
+    pub markets: Vec<EligibleMarket>,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Composer-published creator selection. Splitting variable-size items into a
+/// prior transaction keeps create/reconstitution transactions under Solana's
+/// packet limit without weakening Ed25519 authorization.
+pub struct CompositionDraft {
+    pub composition_hash: [u8; 32],
+    pub eligibility_hash: [u8; 32],
+    pub eligibility_nonce: u64,
+    pub composition_nonce: u64,
+    pub composer: Pubkey,
+    pub published_at: i64,
+    #[max_len(MAX_BASKET_ITEMS)]
+    pub items: Vec<BasketAsset>,
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum TokenAssetClass {
+    Crypto,
+    TokenizedEquity,
+    Other,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum TradingAvailability {
+    TwentyFourSeven,
+    TwentyFourFive,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum SpotPriceSource {
+    Pyth { feed_id: [u8; 32] },
+    Switchboard { feed: Pubkey },
+    SignedTwap,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
+pub struct AllowedToken {
+    pub token_mint: Pubkey,
+    pub jupiter_verified: bool,
+    pub asset_class: TokenAssetClass,
+    pub availability: TradingAvailability,
+    pub price_source: SpotPriceSource,
+    pub backing_attestation_hash: [u8; 32],
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Admin-maintained spot-token registry. Disabling an entry blocks new
+/// compositions but never changes or liquidates an existing basket.
+pub struct TokenAllowlist {
+    pub registered_by: Pubkey,
+    #[max_len(MAX_ALLOWLISTED_TOKENS)]
+    pub tokens: Vec<AllowedToken>,
+    pub updated_at: i64,
+    pub reserved: [u8; REGISTRY_RESERVED_BYTES],
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Latest Composer-signed TWAP fallback for a token without a robust oracle.
+pub struct PriceAttestation {
+    pub token_mint: Pubkey,
+    /// Six-decimal settlement-value price, matching the accounting engine.
+    pub price_value: u64,
+    pub confidence_bps: u16,
+    pub observed_at: i64,
+    pub valid_until: i64,
+    pub nonce: u64,
+    pub signer: Pubkey,
+    pub attestation_hash: [u8; 32],
+    pub reserved: [u8; REGISTRY_RESERVED_BYTES],
+    pub bump: u8,
 }
 
 #[account]
@@ -160,7 +268,8 @@ pub struct InitializeArgs {
 pub struct CreateBasketArgs {
     pub basket_id: [u8; 32],
     pub composition_hash: [u8; 32],
-    pub items: Vec<BasketAsset>,
+    pub eligibility_hash: [u8; 32],
+    pub eligibility_nonce: u64,
     pub creator: Pubkey,
     pub creator_fee_destination: Pubkey,
     pub performance_fee_bps: Option<u16>,
@@ -247,7 +356,46 @@ pub struct FinalSettlementArgs {
 /// Composer-authorized replacement composition.
 pub struct ReconstitutionArgs {
     pub composition_hash: [u8; 32],
-    pub items: Vec<BasketAsset>,
+    pub eligibility_hash: [u8; 32],
+    pub eligibility_nonce: u64,
     pub composition_nonce: u64,
     pub composition_expiry: i64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PublishEligibilityListArgs {
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub expires_at: i64,
+    pub markets: Vec<EligibleMarket>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PublishCompositionDraftArgs {
+    pub composition_hash: [u8; 32],
+    pub eligibility_hash: [u8; 32],
+    pub eligibility_nonce: u64,
+    pub composition_nonce: u64,
+    pub items: Vec<BasketAsset>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct RegisterTokenArgs {
+    pub token_mint: Pubkey,
+    pub jupiter_verified: bool,
+    pub asset_class: TokenAssetClass,
+    pub availability: TradingAvailability,
+    pub price_source: SpotPriceSource,
+    pub backing_attestation_hash: [u8; 32],
+    pub enabled: bool,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct SubmitPriceAttestationArgs {
+    pub token_mint: Pubkey,
+    pub price_value: u64,
+    pub confidence_bps: u16,
+    pub observed_at: i64,
+    pub valid_until: i64,
+    pub nonce: u64,
 }

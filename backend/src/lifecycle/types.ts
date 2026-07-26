@@ -1,6 +1,6 @@
 import type { PublicKey, TransactionInstruction } from "@solana/web3.js";
 
-import type { BasketAsset } from "../contract/composition.js";
+import type { BasketAsset, EligibleMarket } from "../contract/composition.js";
 
 export type BasketLifecycleStatus =
   | "active"
@@ -48,6 +48,9 @@ export interface SignedReconstitution {
   readonly basketId: Uint8Array;
   readonly nextCompositionVersion: number;
   readonly compositionHash: Uint8Array;
+  readonly eligibilityHash: Uint8Array;
+  readonly eligibilityNonce: bigint;
+  readonly eligibleMarkets: readonly EligibleMarket[];
   readonly items: readonly BasketAsset[];
   readonly compositionNonce: bigint;
   readonly compositionExpirySeconds: bigint;

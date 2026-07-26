@@ -1,5 +1,5 @@
 import type { PublicKey } from "@solana/web3.js";
-import type { BasketAsset } from "../contract/composition.js";
+import type { BasketAsset, EligibleMarket } from "../contract/composition.js";
 
 export type MarketDataCondition = "fresh" | "stale" | "illiquid" | "unavailable";
 
@@ -76,20 +76,29 @@ export interface WeightedCompositionItem {
   readonly weightBps: number;
   /** Initial off-chain mark only; it is not signed into the on-chain composition. */
   readonly initialMarkPriceUnits: bigint;
-  /** Audit-only score; it is not raw market data submitted to Solana. */
-  readonly score: bigint;
 }
 
 export interface BasketComposition {
-  readonly version: 1;
+  readonly version: 2;
   /** Exact SHA-256 of contract canonicalCompositionBytes(assets). */
   readonly hash: string;
   readonly hashBytes: Uint8Array;
+  /** Exact SHA-256 of the Composer-screened list; weights are excluded. */
+  readonly eligibilityHash: string;
+  readonly eligibilityHashBytes: Uint8Array;
+  readonly eligibleMarkets: readonly EligibleMarket[];
   readonly auditHash: string;
   readonly composedAtMs: bigint;
   readonly items: readonly WeightedCompositionItem[];
   readonly assets: readonly BasketAsset[];
   readonly rejected: readonly RejectedCandidate[];
+}
+
+export interface CreatorMarketWeight {
+  readonly marketId: string;
+  readonly tokenId: string;
+  readonly outcomeIndex: 0 | 1;
+  readonly weightBps: number;
 }
 
 export interface CompositionSigningPayload {
@@ -103,6 +112,7 @@ export interface CompositionSigningPayload {
   readonly reconstitutionCadenceSecs: bigint;
   readonly compositionNonce: bigint;
   readonly compositionExpiry: bigint;
+  readonly eligibilityNonce: bigint;
   readonly composition: BasketComposition;
 }
 
@@ -129,6 +139,8 @@ export interface SolanaBasketCreationRequest {
 export interface SolanaBasketCreationResult {
   readonly basketAddress: string;
   readonly transactionSignature: string;
+  readonly eligibilityTransactionSignature: string | null;
+  readonly compositionDraftTransactionSignature: string | null;
   readonly compositionHash: string;
   /** Off-chain execution metadata used to initialize the basket portfolio projection. */
   readonly portfolioItems: readonly Readonly<{

@@ -258,11 +258,18 @@ describe("Polymarket lifecycle production adapters", () => {
       }],
     };
     const items = [
-      { marketId: "m1", kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes32(1) } }, weightBps: 4_000 },
+      { marketId: "m1", kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes32(1) } }, weightBps: 3_000 },
       { marketId: "m2", kind: { predictionMarket: { outcome: 0, ctfTokenId: bytes32(2) } }, weightBps: 3_000 },
-      { marketId: "m3", kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes32(3) } }, weightBps: 3_000 },
+      { marketId: "m3", kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes32(3) } }, weightBps: 2_000 },
+      { marketId: "m4", kind: { predictionMarket: { outcome: 0, ctfTokenId: bytes32(4) } }, weightBps: 2_000 },
     ] as const;
     const compositionHash = (await import("../src/contract/composition.js")).compositionHash(items);
+    const eligibleMarkets = items.map((item) => ({
+      marketId: item.marketId,
+      outcome: item.kind.predictionMarket.outcome,
+      ctfTokenId: item.kind.predictionMarket.ctfTokenId,
+    }));
+    const eligibilityHash = (await import("../src/contract/composition.js")).eligibilityHash(eligibleMarkets);
     const store = new MemoryExecutionStore();
     const orders = new Map<string, string>();
     let marketCalls = 0;
@@ -302,7 +309,8 @@ describe("Polymarket lifecycle production adapters", () => {
     );
     const authorization = {
       basket, basketId: new Uint8Array(32).fill(1), nextCompositionVersion: 2,
-      compositionHash, items, compositionNonce: 2n, compositionExpirySeconds: 2_000_000_100n,
+      compositionHash, eligibilityHash, eligibilityNonce: 1n, eligibleMarkets,
+      items, compositionNonce: 2n, compositionExpirySeconds: 2_000_000_100n,
       encodedMessage: new Uint8Array([1]), composerPublicKey: new Uint8Array(32).fill(2), composerSignature: new Uint8Array(64).fill(3),
     } as const;
     const reconstitutionRequest = { operationId: "recon-1", basket, previousCompositionVersion: 1, nextComposition: authorization } as const;
@@ -310,10 +318,14 @@ describe("Polymarket lifecycle production adapters", () => {
     const first = await executor.rebalance(reconstitutionRequest);
     const replay = await executor.rebalance(reconstitutionRequest);
     assert.equal(first.executionHash, replay.executionHash);
-    assert.equal(orders.size, 2);
-    assert.equal(marketCalls, 3);
-    assert.equal(store.holdings.length, 3);
-    assert.equal(store.idle, 0n);
+    // Reducing the retained m1 weight from 40% to 30% adds one sell before
+    // the three target-market buys.
+    assert.equal(orders.size, 4);
+    assert.equal(marketCalls, 4);
+    assert.equal(store.holdings.length, 4);
+    // Worst-price bounded buys intentionally leave the unspent pUSD attributed
+    // to the basket instead of forcing a final trade beyond the target.
+    assert.equal(store.idle, 8_804_665n);
   });
 
   it("redeems a shared-wallet condition once and attributes only basket-owned winning tokens", async () => {

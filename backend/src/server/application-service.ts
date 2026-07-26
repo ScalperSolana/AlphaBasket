@@ -146,6 +146,13 @@ const policySchema = z.object({
   minVolume24hPusdUnits: canonicalUnsigned,
 }).strict();
 
+const creatorMarketWeightSchema = z.object({
+  marketId: z.string().min(1).max(64),
+  tokenId: z.string().regex(/^(?:0|[1-9][0-9]*)$/u),
+  outcomeIndex: z.union([z.literal(0), z.literal(1)]),
+  weightBps: z.number().int().min(1).max(3_000),
+}).strict();
+
 const createBasketSchema = z.object({
   basketId: hex32,
   creator: publicKey,
@@ -153,9 +160,11 @@ const createBasketSchema = z.object({
   isPerpetual: z.boolean(),
   reconstitutionCadenceSecs: canonicalUnsigned,
   compositionNonce: positiveUnsigned,
+  eligibilityNonce: positiveUnsigned,
   compositionExpiry: positiveUnsigned,
   performanceFeeBps: z.number().int().min(0).max(2_000).optional(),
   candidates: z.array(candidateSchema).min(1).max(64),
+  creatorWeights: z.array(creatorMarketWeightSchema).min(4).max(16),
   policy: policySchema,
 }).strict();
 
@@ -534,9 +543,11 @@ export class AlphaBasketApiService implements FinancialApiPort {
       isPerpetual: request.isPerpetual,
       reconstitutionCadenceSecs: request.reconstitutionCadenceSecs,
       compositionNonce: request.compositionNonce,
+      eligibilityNonce: request.eligibilityNonce,
       compositionExpiry: request.compositionExpiry,
       ...(request.performanceFeeBps === undefined ? {} : { performanceFeeBps: request.performanceFeeBps }),
       candidates: request.candidates as readonly ComposerCandidate[],
+      creatorWeights: request.creatorWeights,
       policy: request.policy as ComposerPolicy,
     });
     await this.requests.initializeBasketPortfolio({

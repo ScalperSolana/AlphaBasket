@@ -5,6 +5,7 @@ import {
   COMPOSITION_DOMAIN,
   DEPOSIT_INTENT_DOMAIN,
   MAX_CREATOR_PERFORMANCE_FEE_BPS,
+  PRICE_ATTESTATION_DOMAIN,
   RECONSTITUTION_DOMAIN,
   WITHDRAWAL_INTENT_DOMAIN,
 } from "./constants.js";
@@ -25,7 +26,8 @@ export interface CreateCompositionAuthorization {
   readonly basketId: Uint8Array;
   readonly creator: PublicKey;
   readonly creatorFeeDestination: PublicKey;
-  readonly compositionHash: Uint8Array;
+  readonly eligibilityHash: Uint8Array;
+  readonly eligibilityNonce: bigint;
   readonly performanceFeeBps: number;
   readonly isPerpetual: boolean;
   readonly reconstitutionCadenceSecs: bigint;
@@ -64,7 +66,8 @@ export function createCompositionAuthorizationMessage(
       value.creatorFeeDestination,
       "creatorFeeDestination",
     ),
-    nonZeroBytes32(value.compositionHash, "compositionHash"),
+    nonZeroBytes32(value.eligibilityHash, "eligibilityHash"),
+    encodeU64LE(value.eligibilityNonce, "eligibilityNonce"),
     encodeU16LE(feeBps, "performanceFeeBps"),
     encodeBoolean(value.isPerpetual, "isPerpetual"),
     encodeI64LE(
@@ -79,7 +82,8 @@ export function createCompositionAuthorizationMessage(
 export interface ReconstitutionAuthorization {
   readonly basketId: Uint8Array;
   readonly nextCompositionVersion: number;
-  readonly compositionHash: Uint8Array;
+  readonly eligibilityHash: Uint8Array;
+  readonly eligibilityNonce: bigint;
   readonly compositionNonce: bigint;
   readonly compositionExpiry: bigint;
   readonly programId?: PublicKey;
@@ -100,9 +104,46 @@ export function reconstitutionAuthorizationMessage(
     publicKeyBytes(programId, "programId"),
     bytes32(value.basketId, "basketId"),
     encodeU32LE(value.nextCompositionVersion, "nextCompositionVersion"),
-    nonZeroBytes32(value.compositionHash, "compositionHash"),
+    nonZeroBytes32(value.eligibilityHash, "eligibilityHash"),
+    encodeU64LE(value.eligibilityNonce, "eligibilityNonce"),
     encodeU64LE(value.compositionNonce, "compositionNonce"),
     encodeI64LE(value.compositionExpiry, "compositionExpiry"),
+  ]);
+}
+
+export interface SpotPriceAttestation {
+  readonly tokenMint: PublicKey;
+  readonly priceValue: bigint;
+  readonly confidenceBps: number;
+  readonly observedAt: bigint;
+  readonly validUntil: bigint;
+  readonly nonce: bigint;
+  readonly programId?: PublicKey;
+}
+
+export function spotPriceAttestationMessage(
+  value: SpotPriceAttestation,
+): Buffer {
+  if (value.priceValue <= 0n || value.nonce <= 0n) {
+    throw new RangeError("priceValue and nonce must be positive");
+  }
+  const confidenceBps = assertU16(value.confidenceBps, "confidenceBps");
+  if (confidenceBps > 10_000) {
+    throw new RangeError("confidenceBps cannot exceed 10000");
+  }
+  if (value.observedAt <= 0n || value.validUntil <= value.observedAt) {
+    throw new RangeError("price attestation timestamps are invalid");
+  }
+  const programId = value.programId ?? ALPHABASKET_PROGRAM_ID;
+  return Buffer.concat([
+    PRICE_ATTESTATION_DOMAIN,
+    publicKeyBytes(programId, "programId"),
+    nonZeroPublicKeyBytes(value.tokenMint, "tokenMint"),
+    encodeU64LE(value.priceValue, "priceValue"),
+    encodeU16LE(confidenceBps, "confidenceBps"),
+    encodeI64LE(value.observedAt, "observedAt"),
+    encodeI64LE(value.validUntil, "validUntil"),
+    encodeU64LE(value.nonce, "nonce"),
   ]);
 }
 

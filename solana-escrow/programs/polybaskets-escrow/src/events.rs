@@ -57,6 +57,45 @@ pub struct BasketCreated {
 }
 
 #[event]
+pub struct EligibilityListPublished {
+    pub eligibility_list: Pubkey,
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub market_count: u16,
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct CompositionDraftPublished {
+    pub composition_draft: Pubkey,
+    pub composition_hash: [u8; 32],
+    pub eligibility_hash: [u8; 32],
+    pub eligibility_nonce: u64,
+    pub composition_nonce: u64,
+    pub item_count: u16,
+}
+
+#[event]
+pub struct TokenAllowlistUpdated {
+    pub token_allowlist: Pubkey,
+    pub token_mint: Pubkey,
+    pub enabled: bool,
+    pub jupiter_verified: bool,
+}
+
+#[event]
+pub struct PriceAttestationSubmitted {
+    pub price_attestation: Pubkey,
+    pub token_mint: Pubkey,
+    pub price_value: u64,
+    pub confidence_bps: u16,
+    pub observed_at: i64,
+    pub valid_until: i64,
+    pub nonce: u64,
+    pub attestation_hash: [u8; 32],
+}
+
+#[event]
 pub struct DepositSettled {
     pub intent_hash: [u8; 32],
     pub intent_nonce: u64,

@@ -60,7 +60,12 @@ export class ReconstitutionWorkflow {
 
   public async execute(request: ReconstitutionWorkflowRequest): Promise<ReconstitutionWorkflowResult> {
     const auth = request.authorization;
-    if (auth.nextCompositionVersion <= 1 || auth.items.length === 0 || auth.compositionNonce <= 0n) {
+    if (
+      auth.nextCompositionVersion <= 1 ||
+      auth.items.length === 0 ||
+      auth.compositionNonce <= 0n ||
+      auth.eligibilityNonce <= 0n
+    ) {
       throw new RangeError("invalid reconstitution authorization");
     }
     let run = await this.runs.createOrLoad({

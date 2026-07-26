@@ -70,6 +70,35 @@ pub mod polybaskets_escrow {
         instructions::create_basket::create_basket_handler(ctx, args)
     }
 
+    /// Publishes a short-lived Composer-screened prediction-market list.
+    pub fn publish_eligibility_list(
+        ctx: Context<PublishEligibilityList>,
+        args: PublishEligibilityListArgs,
+    ) -> Result<()> {
+        instructions::registry::publish_eligibility_list_handler(ctx, args)
+    }
+
+    /// Publishes a creator-selected weighted composition in a size-safe prior transaction.
+    pub fn publish_composition_draft(
+        ctx: Context<PublishCompositionDraft>,
+        args: PublishCompositionDraftArgs,
+    ) -> Result<()> {
+        instructions::registry::publish_composition_draft_handler(ctx, args)
+    }
+
+    /// Adds, updates, disables, or re-enables a Jupiter spot-token allowlist entry.
+    pub fn register_token(ctx: Context<RegisterToken>, args: RegisterTokenArgs) -> Result<()> {
+        instructions::registry::register_token_handler(ctx, args)
+    }
+
+    /// Records a fresh Composer-signed TWAP for a signed-fallback spot token.
+    pub fn submit_price_attestation(
+        ctx: Context<SubmitPriceAttestation>,
+        args: SubmitPriceAttestationArgs,
+    ) -> Result<()> {
+        instructions::registry::submit_price_attestation_handler(ctx, args)
+    }
+
     /// Completes a user-signed deposit after external Polymarket execution.
     pub fn complete_deposit(
         ctx: Context<CompleteDeposit>,
