@@ -177,36 +177,5 @@ services:
       timeout: 5s
       retries: 12
 
-  ai-server:
-    build:
-      context: .
-      dockerfile: ai-server/Dockerfile
-    container_name: polybaskets-ai-server
-    restart: unless-stopped
-    depends_on:
-      bet-quote-service:
-        condition: service_healthy
-    environment:
-      AI_SERVER_PORT: 4370
-      AI_SOLANA_RPC_URL: ${AI_SOLANA_RPC_URL:-https://api.devnet.solana.com}
-      AI_SOLANA_CLUSTER: ${AI_SOLANA_CLUSTER:-devnet}
-      AI_USDC_MINT: ${AI_USDC_MINT:-Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr}
-      AI_QUOTE_API_URL: http://bet-quote-service:4360
-      AI_OPERATOR_KEYPAIR: ${AI_OPERATOR_KEYPAIR:-}
-      AI_WRITE_API_KEY: ${AI_WRITE_API_KEY:-}
-      AI_ALLOWED_ORIGINS: ${AI_ALLOWED_ORIGINS:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
-      BACKBOARD_API_KEY: ${BACKBOARD_API_KEY:-}
-      THESIS_RESEARCHER_ASSISTANT_ID: ${THESIS_RESEARCHER_ASSISTANT_ID:-}
-      POLYMARKET_GAMMA_BASE_URL: ${POLYMARKET_GAMMA_BASE_URL:-https://gamma-api.polymarket.com}
-    ports:
-      - "127.0.0.1:${AI_SERVER_PORT:-4370}:4370"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4370/api/health').then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-
 volumes:
   daily_contest_postgres:

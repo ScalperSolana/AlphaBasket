@@ -1,4 +1,0 @@
-interface:
-  display_name: "AlphaBasket"
-  short_description: "Research and execute Solana prediction baskets"
-  default_prompt: "Use $alphabasket to research a thesis and prepare a weighted prediction basket."
