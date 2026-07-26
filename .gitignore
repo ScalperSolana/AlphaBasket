@@ -21,6 +21,8 @@ settler-bot/dist
 .env.*.local
 .env.daily-contest
 .env.daily-contest.secrets
+backend/.remote-signer/
+backend/*.keyring.json
 settler-bot/.env
 relayer/.env
 contest-bot/.env

@@ -107,10 +107,8 @@ Performance fees follow redeemed-share high-water/cost-basis accounting so
 burned shares cannot be charged twice. Multiple deposits use weighted-average
 cost basis and holding time.
 
-Existing limits remain:
+Composition constraints remain:
 
-- Maximum cumulative gross deposit per user per basket: 500 USDC.
-- Maximum cumulative gross deposit per basket: 10,000 USDC.
 - Maximum weight for one Polymarket event: 4,000 bps (40%).
 - Composition weights must total 10,000 bps.
 
@@ -211,7 +209,7 @@ SOLANA_SETTLEMENT_RECEIVER=<Solana mainnet settlement owner>
 
 EXECUTION_GATEWAY_URL=<internal gateway URL>
 EXECUTION_GATEWAY_TOKEN=<random 32+ character secret>
-REMOTE_SIGNER_URL=<KMS/HSM signing service>
+REMOTE_SIGNER_URL=<remote signing service>
 REMOTE_SIGNER_TOKEN=<random 32+ character secret>
 ```
 
@@ -234,7 +232,8 @@ Requirements:
 - PostgreSQL 16 or compatible.
 - Temporal.
 - Solana CLI and Anchor 0.32.1 for program development.
-- An external KMS/HSM signer endpoint for live execution.
+- The included loopback development signer for internal testing, or an external
+  KMS/HSM signer endpoint for production.
 
 Install and migrate:
 
@@ -249,6 +248,7 @@ Start production-style processes in this order:
 ```bash
 npm run start:indexer:backend
 npm run start:nav:backend
+npm run start:remote-signer:backend
 npm run start:execution-gateway:backend
 npm run start:execution-dispatcher:backend
 npm run start:execution:backend
@@ -259,8 +259,21 @@ npm run start:backend
 Development equivalents use the `dev:*:backend` scripts in the root
 `package.json`.
 
-The API listens on `127.0.0.1:3001` by default. The execution gateway listens
-on `127.0.0.1:3002` by default.
+The API listens on `127.0.0.1:3001`, the execution gateway on
+`127.0.0.1:3002`, and the internal-testing remote signer on
+`127.0.0.1:3003` by default. Generate its ignored mode-`0600` keyring first:
+
+```bash
+mkdir -p backend/.remote-signer
+npm run signer:keyring:generate:backend -- \
+  --output /absolute/path/to/AlphaBasket/backend/.remote-signer/keyring.json
+```
+
+The command prints only public identities to place in
+`POLYMARKET_EXECUTION_WALLET`, `SOLANA_SETTLEMENT_RECEIVER`,
+`COMPOSER_SIGNER_PUBLIC_KEY`, and `BACKEND_SIGNER_PUBLIC_KEY`. Full setup and
+the program-key mapping are documented in
+[`backend/README.md`](backend/README.md#remote-signer-for-internal-testing).
 
 ## Verification
 
@@ -311,7 +324,8 @@ management-fee automation, reconciliation and security tests are implemented.
 Before a live hybrid test, operators must still:
 
 1. connect real devnet/mainnet/Polygon RPCs;
-2. connect and provision the KMS/HSM signer roles;
+2. generate the loopback development keyring for internal testing, or provision
+   the production KMS/HSM signer roles;
 3. configure CLOB credentials and required Polymarket token approvals;
 4. register/fund the execution and settlement wallets;
 5. apply migrations and start PostgreSQL/Temporal/workers;
@@ -320,8 +334,17 @@ Before a live hybrid test, operators must still:
 
 The React frontend still needs to be wired to the V2 quote/intent/operation APIs
 and use a separate Solana-mainnet capital connection for deposit transactions.
-The production Composer classifier source and its full Gamma → CLOB → Composer
-integration test also remain.
+
+Production Composer TODO:
+
+1. Wire authoritative Gamma market sourcing into the backend.
+2. Connect a trusted classifier for thematic relevance and outcome clarity.
+3. Fetch and verify current price, spread, depth and volume directly from the
+   CLOB before composing a basket.
+4. Restrict caller-prepared candidate data to internal-testing environments;
+   production must not sign caller-supplied liquidity or classification claims.
+5. Add a full Gamma → classifier → CLOB → filtering/weighting → signed
+   composition → devnet/mainnet `create_basket` integration test.
 
 Detailed backend operations are documented in
 [`backend/README.md`](backend/README.md) and
