@@ -4,6 +4,10 @@ const nonEmpty = z.string().trim().min(1);
 const optionalSecret = z.string().trim().min(32).max(512).optional();
 const decimalUnits = z.string().regex(/^(?:0|[1-9][0-9]*)$/u).transform((value) => BigInt(value));
 const commaSeparated = z.string().default("").transform((value) => Object.freeze(value.split(",").map((item) => item.trim()).filter((item) => item.length > 0)));
+const environmentBoolean = z.union([
+  z.boolean(),
+  z.enum(["true", "false"]).transform((value) => value === "true"),
+]);
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -82,6 +86,13 @@ const environmentSchema = z.object({
   POLYMARKET_CLOB_API_PASSPHRASE: nonEmpty.optional(),
   STAGING_SOLANA_FUNDING_DESTINATION: nonEmpty.optional(),
   SOLANA_SETTLEMENT_RECEIVER: nonEmpty.optional(),
+  JUPITER_SPOT_ENABLED: environmentBoolean.default(false),
+  JUPITER_API_KEY: nonEmpty.max(512).optional(),
+  JUPITER_TOKENS_URL: z.string().url().default("https://api.jup.ag/tokens/v2"),
+  JUPITER_SWAP_URL: z.string().url().default("https://api.jup.ag/swap/v2"),
+  JUPITER_AGGREGATOR_PROGRAM_ID: nonEmpty.default("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+  JUPITER_ROUTE_PROBE_UNITS: decimalUnits.default("1000000"),
+  JUPITER_XSTOCK_MINTS: commaSeparated,
   REMOTE_SIGNER_URL: z.string().url().optional(),
   REMOTE_SIGNER_TOKEN: optionalSecret,
   BACKEND_SIGNER_PUBLIC_KEY: nonEmpty.optional(),
@@ -187,6 +198,15 @@ export type BackendConfig = Readonly<{
     stagingSolanaFundingDestination?: string;
     solanaSettlementReceiver?: string;
   }>;
+  jupiter: Readonly<{
+    enabled: boolean;
+    tokensUrl: string;
+    swapUrl: string;
+    aggregatorProgramId: string;
+    routeProbeUnits: bigint;
+    xStockMints: readonly string[];
+    apiKey?: string;
+  }>;
   remoteSigner: Readonly<{
     url?: string;
     token?: string;
@@ -262,6 +282,22 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
   ];
   if (clobCredentials.some((item) => item !== undefined) && clobCredentials.some((item) => item === undefined)) {
     throw new Error("Polymarket CLOB API key, secret and passphrase must be configured together");
+  }
+  if (value.JUPITER_SPOT_ENABLED) {
+    if (
+      value.ACCOUNTING_SOLANA_CLUSTER !== "mainnet-beta" ||
+      value.CAPITAL_SOLANA_CLUSTER !== "mainnet-beta"
+    ) {
+      throw new Error(
+        "live Jupiter spot execution requires the accounting program and capital on Solana mainnet-beta",
+      );
+    }
+    if (value.JUPITER_API_KEY === undefined) {
+      throw new Error("JUPITER_API_KEY is required when Jupiter spot execution is enabled");
+    }
+  }
+  if (value.JUPITER_ROUTE_PROBE_UNITS <= 0n) {
+    throw new Error("JUPITER_ROUTE_PROBE_UNITS must be positive");
   }
   const gatewayLimits = [
     value.EXECUTION_GATEWAY_MAXIMUM_MAKER_UNITS,
@@ -393,6 +429,17 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
       }),
       ...(value.SOLANA_SETTLEMENT_RECEIVER === undefined ? {} : {
         solanaSettlementReceiver: value.SOLANA_SETTLEMENT_RECEIVER,
+      }),
+    }),
+    jupiter: Object.freeze({
+      enabled: value.JUPITER_SPOT_ENABLED,
+      tokensUrl: value.JUPITER_TOKENS_URL,
+      swapUrl: value.JUPITER_SWAP_URL,
+      aggregatorProgramId: value.JUPITER_AGGREGATOR_PROGRAM_ID,
+      routeProbeUnits: value.JUPITER_ROUTE_PROBE_UNITS,
+      xStockMints: value.JUPITER_XSTOCK_MINTS,
+      ...(value.JUPITER_API_KEY === undefined ? {} : {
+        apiKey: value.JUPITER_API_KEY,
       }),
     }),
     remoteSigner: Object.freeze({
