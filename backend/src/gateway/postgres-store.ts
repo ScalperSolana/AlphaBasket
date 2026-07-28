@@ -123,4 +123,87 @@ export class PostgresGatewayRequestStore implements GatewayRequestStorePort {
     );
     if (result.rowCount !== 1) throw new Error("execution gateway finalization journal conflict");
   }
+
+  public async findFinalizedByTransactionReference(
+    requestKind: GatewayRequestKind,
+    transactionReference: string,
+  ): Promise<PreparedGatewayRequest | null> {
+    const result = await this.sql.query<GatewayRow>(
+      `SELECT ${selection} FROM execution_gateway_requests
+       WHERE request_kind = $1 AND transaction_reference = $2
+         AND state = 'finalized'`,
+      [requestKind, transactionReference],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapRow(row);
+  }
+
+  public async claimCapitalSources(request: {
+    readonly requestKey: string;
+    readonly requestHash: string;
+    readonly sources: readonly Readonly<{
+      kind: "bridge_receipt" | "jupiter_swap";
+      reference: string;
+      amountUnits: bigint;
+    }>[];
+    readonly now: Date;
+  }): Promise<void> {
+    if (
+      request.requestKey.length === 0 ||
+      request.requestKey.length > 256 ||
+      !/^[0-9a-f]{64}$/u.test(request.requestHash)
+    ) {
+      throw new TypeError("capital source claim identity is invalid");
+    }
+    const seen = new Set<string>();
+    await this.sql.transaction(async (transaction) => {
+      for (const source of request.sources) {
+        const key = `${source.kind}\u0000${source.reference}`;
+        if (
+          source.reference.length === 0 ||
+          source.reference.length > 256 ||
+          source.amountUnits <= 0n ||
+          seen.has(key)
+        ) {
+          throw new TypeError("capital source claim is malformed or duplicated");
+        }
+        seen.add(key);
+        await transaction.query(
+          `INSERT INTO execution_gateway_capital_source_claims (
+             source_kind, source_reference, request_key, request_hash,
+             amount_units, created_at
+           ) VALUES ($1, $2, $3, $4, $5::numeric, $6)
+           ON CONFLICT (source_kind, source_reference) DO NOTHING`,
+          [
+            source.kind,
+            source.reference,
+            request.requestKey,
+            request.requestHash,
+            source.amountUnits.toString(10),
+            request.now,
+          ],
+        );
+        const claimed = await transaction.query<{
+          request_key: string;
+          request_hash: string;
+          amount_units: string;
+        }>(
+          `SELECT request_key, request_hash,
+                  amount_units::text AS amount_units
+           FROM execution_gateway_capital_source_claims
+           WHERE source_kind = $1 AND source_reference = $2`,
+          [source.kind, source.reference],
+        );
+        const row = claimed.rows[0];
+        if (
+          row === undefined ||
+          row.request_key !== request.requestKey ||
+          row.request_hash !== request.requestHash ||
+          BigInt(row.amount_units) !== source.amountUnits
+        ) {
+          throw new Error("capital source was already claimed by another split");
+        }
+      }
+    }, { isolation: "serializable" });
+  }
 }

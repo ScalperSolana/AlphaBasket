@@ -16,11 +16,14 @@ import { loadBackendConfig } from "../config/index.js";
 import {
   ClobOrderGateway,
   ExecutionGatewayService,
+  JupiterSwapGateway,
   PolygonPusdTransferGateway,
   PostgresGatewayRequestStore,
   SolanaUsdcSplitGateway,
+  Web3JupiterSwapFinalityVerifier,
   createExecutionGatewayHttpServer,
   solanaCapitalSplitMessageValidator,
+  solanaJupiterSwapMessageValidator,
   type PolygonTransferRpcPort,
 } from "../gateway/index.js";
 import { PgSqlClient } from "../persistence/index.js";
@@ -56,6 +59,9 @@ const settlementOwner = new PublicKey(
   required(config.polymarket.solanaSettlementReceiver, "SOLANA_SETTLEMENT_RECEIVER"),
 );
 const usdcMint = new PublicKey(config.solana.capital.usdcMint);
+const jupiterAggregatorProgram = new PublicKey(
+  config.jupiter.aggregatorProgramId,
+);
 const remoteSignerUrl = required(config.remoteSigner.url, "REMOTE_SIGNER_URL");
 const remoteSignerToken = required(config.remoteSigner.token, "REMOTE_SIGNER_TOKEN");
 
@@ -91,18 +97,28 @@ const signer = new PolicyEnforcedSigner({
       role: "solana_settlement",
       keyReference: config.signers.solanaSettlementKeyId,
       algorithm: "ed25519",
+      expectedPublicKey: settlementOwner.toBytes(),
       allowedDomains: new Set(["alphabasket:solana-capital-transaction:v1"]),
-      allowedActions: new Set(["split_withdrawal_usdc"]),
+      allowedActions: new Set(["split_withdrawal_usdc", "execute_jupiter_swap"]),
       allowedNetworks: new Set(["solana-mainnet-beta"]),
       maxPayloadBytes: 1_232,
       requireExpiry: true,
       maxExpiryMs: 60_000,
       requiredContext: new Set(["intentHash"] as const),
-      validatePayload: solanaCapitalSplitMessageValidator({
-        sourceOwner: settlementOwner,
-        usdcMint,
-        maximumSplitUnits: config.executionGateway.maximumSplitUnits,
-      }),
+      validatePayload: (payload, context) => {
+        const validator = context.action === "execute_jupiter_swap"
+          ? solanaJupiterSwapMessageValidator({
+              sourceOwner: settlementOwner,
+              aggregatorProgramId: jupiterAggregatorProgram,
+              maximumMessageBytes: 1_232,
+            })
+          : solanaCapitalSplitMessageValidator({
+              sourceOwner: settlementOwner,
+              usdcMint,
+              maximumSplitUnits: config.executionGateway.maximumSplitUnits,
+            });
+        validator(payload);
+      },
     },
   ],
   keySigner: new HttpKeySigner(httpClient, remoteSignerToken, {
@@ -199,7 +215,19 @@ const solanaSplit = new SolanaUsdcSplitGateway(store, signer, capitalConnection,
   maximumNetworkFeeLamports: config.executionGateway.maximumSolanaFeeLamports,
   expectedDecimals: 6,
 });
-const service = new ExecutionGatewayService(clob, polygonTransfer, solanaSplit);
+const jupiter = config.jupiter.enabled
+  ? new JupiterSwapGateway(store, signer, httpClient, {
+      deploymentMode: config.deployment.mode,
+      apiKey: required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+      taker: settlementOwner,
+      usdcMint,
+      aggregatorProgramId: jupiterAggregatorProgram,
+      maximumInputUnits: config.executionGateway.maximumJupiterSwapUnits,
+      finality: new Web3JupiterSwapFinalityVerifier(capitalConnection),
+      baseUrl: config.jupiter.swapUrl,
+    })
+  : undefined;
+const service = new ExecutionGatewayService(clob, polygonTransfer, solanaSplit, jupiter);
 const server = createExecutionGatewayHttpServer({
   service,
   bearerToken: gatewayToken,
@@ -244,4 +272,5 @@ process.stdout.write(`${JSON.stringify({
   port: config.executionGateway.port,
   capitalCluster: config.deployment.capitalSolanaCluster,
   polygonChainId: 137,
+  jupiterSpotEnabled: config.jupiter.enabled,
 })}\n`);

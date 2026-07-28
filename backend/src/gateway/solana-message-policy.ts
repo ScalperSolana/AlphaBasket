@@ -1,4 +1,9 @@
-import { Message, PublicKey } from "@solana/web3.js";
+import {
+  ComputeBudgetProgram,
+  Message,
+  PublicKey,
+  VersionedMessage,
+} from "@solana/web3.js";
 import bs58 from "bs58";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -94,6 +99,70 @@ export function solanaCapitalSplitMessageValidator(options: {
     }
     if (transferred <= 0n || transferred > options.maximumSplitUnits) {
       throw new Error("capital split total exceeds policy");
+    }
+  };
+}
+
+/**
+ * Defense-in-depth policy for a Jupiter-produced v0 transaction. Route and
+ * amount validation remains in JupiterSwapGateway; this KMS-side check ensures
+ * the key can only sign a transaction whose fee payer/required signer is the
+ * configured capital wallet.
+ */
+export function solanaJupiterSwapMessageValidator(options: {
+  readonly sourceOwner: PublicKey;
+  readonly aggregatorProgramId: PublicKey;
+  readonly maximumMessageBytes?: number;
+}): (payload: Uint8Array) => void {
+  const maximumMessageBytes = options.maximumMessageBytes ?? 1_232;
+  return (payload) => {
+    if (payload.byteLength === 0 || payload.byteLength > maximumMessageBytes) {
+      throw new Error("Jupiter transaction message size is outside policy");
+    }
+    const message = VersionedMessage.deserialize(Buffer.from(payload));
+    if (message.version !== 0) {
+      throw new Error("Jupiter capital signing requires a version-0 transaction");
+    }
+    if (!message.staticAccountKeys[0]?.equals(options.sourceOwner)) {
+      throw new Error("Jupiter transaction fee payer is not the configured capital wallet");
+    }
+    const requiredSigners = message.staticAccountKeys.slice(
+      0,
+      message.header.numRequiredSignatures,
+    );
+    if (
+      requiredSigners.length !== 1 ||
+      !requiredSigners[0]?.equals(options.sourceOwner)
+    ) {
+      throw new Error(
+        "Jupiter transaction must require exactly the configured capital signer",
+      );
+    }
+    if (message.compiledInstructions.length === 0) {
+      throw new Error("Jupiter transaction contains no instructions");
+    }
+    if (message.compiledInstructions.length > 32) {
+      throw new Error("Jupiter transaction instruction count is outside policy");
+    }
+    const allowedPrograms = new Set([
+      options.aggregatorProgramId.toBase58(),
+      ComputeBudgetProgram.programId.toBase58(),
+      ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
+    ]);
+    let aggregatorCalls = 0;
+    for (const instruction of message.compiledInstructions) {
+      const program = message.staticAccountKeys[instruction.programIdIndex];
+      if (program === undefined || !allowedPrograms.has(program.toBase58())) {
+        throw new Error(
+          "Jupiter transaction invokes an unapproved top-level program",
+        );
+      }
+      if (program.equals(options.aggregatorProgramId)) aggregatorCalls += 1;
+    }
+    if (aggregatorCalls !== 1) {
+      throw new Error(
+        "Jupiter transaction must invoke the configured aggregator exactly once",
+      );
     }
   };
 }

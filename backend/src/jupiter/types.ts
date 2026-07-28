@@ -62,6 +62,48 @@ export interface JupiterSwapBuildPort {
   buildExactIn(request: JupiterSwapBuildRequest): Promise<JupiterSwapBuild>;
 }
 
+export interface JupiterExactInRequest {
+  readonly idempotencyKey: string;
+  readonly inputMint: PublicKey;
+  readonly outputMint: PublicKey;
+  readonly inputAmountUnits: bigint;
+  readonly slippageBps: number;
+  readonly taker: PublicKey;
+}
+
+export interface JupiterExactInResult {
+  readonly idempotencyKey: string;
+  readonly inputMint: PublicKey;
+  readonly outputMint: PublicKey;
+  readonly requestedInputUnits: bigint;
+  readonly filledInputUnits: bigint;
+  readonly filledOutputUnits: bigint;
+  readonly minimumOutputUnits: bigint;
+  readonly transactionSignature: string;
+  readonly finalizedSlot: bigint;
+  readonly executedAtMs: bigint;
+  readonly status: "filled" | "partially_filled";
+}
+
+export interface JupiterExecutionPort {
+  executeExactIn(request: JupiterExactInRequest): Promise<JupiterExactInResult>;
+}
+
+export interface JupiterPriceMark {
+  readonly mint: PublicKey;
+  /** Six-decimal USDC value of one whole token. */
+  readonly priceUsdcUnits: bigint;
+  readonly observedAtMs: bigint;
+  readonly sourceHash: string;
+}
+
+export interface JupiterPricePort {
+  getUsdcPrices(
+    mints: readonly PublicKey[],
+    usdcMint: PublicKey,
+  ): Promise<readonly JupiterPriceMark[]>;
+}
+
 export interface JupiterSpotEligibility {
   readonly token: JupiterTokenMetadata;
   readonly route: JupiterSwapBuild;

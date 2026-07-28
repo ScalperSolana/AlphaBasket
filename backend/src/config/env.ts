@@ -54,6 +54,7 @@ const environmentSchema = z.object({
   EXECUTION_GATEWAY_MAXIMUM_TAKER_UNITS: decimalUnits.default("1000000000"),
   EXECUTION_GATEWAY_MAXIMUM_TRANSFER_UNITS: decimalUnits.default("10000000"),
   EXECUTION_GATEWAY_MAXIMUM_SPLIT_UNITS: decimalUnits.default("10000000"),
+  EXECUTION_GATEWAY_MAXIMUM_JUPITER_SWAP_UNITS: decimalUnits.default("10000000"),
   EXECUTION_GATEWAY_MAXIMUM_POLYGON_FEE_WEI: decimalUnits.default("100000000000000000"),
   EXECUTION_GATEWAY_MAXIMUM_SOLANA_FEE_LAMPORTS: decimalUnits.default("10000000"),
   INDEXER_ACCOUNT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
@@ -90,6 +91,7 @@ const environmentSchema = z.object({
   JUPITER_API_KEY: nonEmpty.max(512).optional(),
   JUPITER_TOKENS_URL: z.string().url().default("https://api.jup.ag/tokens/v2"),
   JUPITER_SWAP_URL: z.string().url().default("https://api.jup.ag/swap/v2"),
+  JUPITER_PRICE_URL: z.string().url().default("https://api.jup.ag/price/v3"),
   JUPITER_AGGREGATOR_PROGRAM_ID: nonEmpty.default("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
   JUPITER_ROUTE_PROBE_UNITS: decimalUnits.default("1000000"),
   JUPITER_XSTOCK_MINTS: commaSeparated,
@@ -163,6 +165,7 @@ export type BackendConfig = Readonly<{
     maximumTakerUnits: bigint;
     maximumTransferUnits: bigint;
     maximumSplitUnits: bigint;
+    maximumJupiterSwapUnits: bigint;
     maximumPolygonFeeWei: bigint;
     maximumSolanaFeeLamports: bigint;
   }>;
@@ -202,6 +205,7 @@ export type BackendConfig = Readonly<{
     enabled: boolean;
     tokensUrl: string;
     swapUrl: string;
+    priceUrl: string;
     aggregatorProgramId: string;
     routeProbeUnits: bigint;
     xStockMints: readonly string[];
@@ -284,16 +288,16 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
     throw new Error("Polymarket CLOB API key, secret and passphrase must be configured together");
   }
   if (value.JUPITER_SPOT_ENABLED) {
-    if (
-      value.ACCOUNTING_SOLANA_CLUSTER !== "mainnet-beta" ||
-      value.CAPITAL_SOLANA_CLUSTER !== "mainnet-beta"
-    ) {
+    if (value.CAPITAL_SOLANA_CLUSTER !== "mainnet-beta") {
       throw new Error(
-        "live Jupiter spot execution requires the accounting program and capital on Solana mainnet-beta",
+        "live Jupiter spot execution requires capital on Solana mainnet-beta",
       );
     }
     if (value.JUPITER_API_KEY === undefined) {
       throw new Error("JUPITER_API_KEY is required when Jupiter spot execution is enabled");
+    }
+    if (value.SOLANA_SETTLEMENT_RECEIVER === undefined) {
+      throw new Error("SOLANA_SETTLEMENT_RECEIVER is required when Jupiter spot execution is enabled");
     }
   }
   if (value.JUPITER_ROUTE_PROBE_UNITS <= 0n) {
@@ -304,6 +308,7 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
     value.EXECUTION_GATEWAY_MAXIMUM_TAKER_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_TRANSFER_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_SPLIT_UNITS,
+    value.EXECUTION_GATEWAY_MAXIMUM_JUPITER_SWAP_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_POLYGON_FEE_WEI,
     value.EXECUTION_GATEWAY_MAXIMUM_SOLANA_FEE_LAMPORTS,
   ];
@@ -386,6 +391,7 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
       maximumTakerUnits: value.EXECUTION_GATEWAY_MAXIMUM_TAKER_UNITS,
       maximumTransferUnits: value.EXECUTION_GATEWAY_MAXIMUM_TRANSFER_UNITS,
       maximumSplitUnits: value.EXECUTION_GATEWAY_MAXIMUM_SPLIT_UNITS,
+      maximumJupiterSwapUnits: value.EXECUTION_GATEWAY_MAXIMUM_JUPITER_SWAP_UNITS,
       maximumPolygonFeeWei: value.EXECUTION_GATEWAY_MAXIMUM_POLYGON_FEE_WEI,
       maximumSolanaFeeLamports: value.EXECUTION_GATEWAY_MAXIMUM_SOLANA_FEE_LAMPORTS,
     }),
@@ -435,6 +441,7 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
       enabled: value.JUPITER_SPOT_ENABLED,
       tokensUrl: value.JUPITER_TOKENS_URL,
       swapUrl: value.JUPITER_SWAP_URL,
+      priceUrl: value.JUPITER_PRICE_URL,
       aggregatorProgramId: value.JUPITER_AGGREGATOR_PROGRAM_ID,
       routeProbeUnits: value.JUPITER_ROUTE_PROBE_UNITS,
       xStockMints: value.JUPITER_XSTOCK_MINTS,

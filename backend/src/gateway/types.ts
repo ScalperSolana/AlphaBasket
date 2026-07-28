@@ -1,4 +1,8 @@
-export type GatewayRequestKind = "fak_order" | "pusd_transfer" | "solana_split";
+export type GatewayRequestKind =
+  | "fak_order"
+  | "pusd_transfer"
+  | "solana_split"
+  | "jupiter_swap";
 
 export interface PreparedGatewayRequest {
   readonly requestKey: string;
@@ -28,6 +32,20 @@ export interface GatewayRequestStorePort {
     result: Readonly<Record<string, unknown>>,
     now: Date,
   ): Promise<void>;
+  findFinalizedByTransactionReference?(
+    requestKind: GatewayRequestKind,
+    transactionReference: string,
+  ): Promise<PreparedGatewayRequest | null>;
+  claimCapitalSources(request: {
+    readonly requestKey: string;
+    readonly requestHash: string;
+    readonly sources: readonly Readonly<{
+      kind: "bridge_receipt" | "jupiter_swap";
+      reference: string;
+      amountUnits: bigint;
+    }>[];
+    readonly now: Date;
+  }): Promise<void>;
 }
 
 export interface GatewayFakOrderRequest {
@@ -59,7 +77,10 @@ export interface GatewaySolanaSplitRequest {
   readonly requestHash: string;
   readonly deploymentMode: "local" | "hybrid_devnet" | "production_canary" | "production";
   readonly idempotencyKey: string;
-  readonly sourceBridgeTransaction: string;
+  readonly sourceBridgeTransaction: string | null;
+  readonly sourceBridgeAmountUnits?: bigint;
+  readonly sourceJupiterTransactions?: readonly string[];
+  readonly idleUsdcAmountUnits?: bigint;
   readonly mint: string;
   readonly userDestination: string;
   readonly creatorDestination: string;
@@ -67,6 +88,31 @@ export interface GatewaySolanaSplitRequest {
   readonly userAmountUnits: bigint;
   readonly creatorAmountUnits: bigint;
   readonly protocolAmountUnits: bigint;
+}
+
+export interface GatewayJupiterSwapRequest {
+  readonly requestHash: string;
+  readonly deploymentMode: "local" | "hybrid_devnet" | "production_canary" | "production";
+  readonly idempotencyKey: string;
+  readonly inputMint: string;
+  readonly outputMint: string;
+  readonly inputAmountUnits: bigint;
+  readonly slippageBps: number;
+  readonly taker: string;
+}
+
+export interface GatewayJupiterSwapResult {
+  readonly requestHash: string;
+  readonly inputMint: string;
+  readonly outputMint: string;
+  readonly requestedInputUnits: bigint;
+  readonly filledInputUnits: bigint;
+  readonly filledOutputUnits: bigint;
+  readonly minimumOutputUnits: bigint;
+  readonly transactionSignature: string;
+  readonly finalizedSlot: bigint;
+  readonly executedAtMs: bigint;
+  readonly status: "filled" | "partially_filled";
 }
 
 export interface ExecutionGatewayServicePort {
@@ -80,4 +126,7 @@ export interface ExecutionGatewayServicePort {
     readonly transactionSignature: string;
     readonly finalizedSlot: bigint;
   }>;
+  executeJupiterSwap?(
+    request: GatewayJupiterSwapRequest,
+  ): Promise<GatewayJupiterSwapResult>;
 }
