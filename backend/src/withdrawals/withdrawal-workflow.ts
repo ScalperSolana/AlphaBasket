@@ -26,6 +26,13 @@ import {
 } from "../settlement/types.js";
 import { BridgePendingError } from "../deposits/deposit-workflow.js";
 import type { WalletExecutionCoordinatorPort } from "../wallets/types.js";
+import {
+  PublicKey,
+} from "@solana/web3.js";
+import type {
+  JupiterExactInResult,
+  JupiterExecutionPort,
+} from "../jupiter/index.js";
 
 const assertLeaseActive = (signal: AbortSignal): void => {
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("execution wallet lease was lost");
@@ -43,12 +50,18 @@ export interface WithdrawalWorkflowRequest {
   readonly positionCostBasisValue: bigint;
   readonly weightedDepositTimestamp: bigint;
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits?: bigint;
   readonly targets: readonly (
-    WeightedExecutionTarget & {
+    WeightedExecutionTarget & ({
+      readonly kind?: "prediction_market";
       readonly currentUnits: bigint;
       readonly worstSellPriceUnits: bigint;
       readonly negativeRisk: boolean;
-    }
+    } | {
+      readonly kind: "spot";
+      readonly tokenMint: string;
+      readonly currentUnits: bigint;
+    })
   )[];
   readonly performanceFeeBps: number;
   readonly maxSlippageBps: number;
@@ -71,11 +84,13 @@ export interface WithdrawalWorkflowResult {
   readonly operation: ExecutionOperation;
   readonly executionBatchHash: string;
   readonly orders: readonly FakOrderResult[];
+  readonly jupiterSwaps: readonly JupiterExactInResult[];
+  readonly idleUsdcConsumed: bigint;
   readonly grossRealizedValue: bigint;
   readonly protocolFee: bigint;
   readonly creatorFee: bigint;
   readonly userValueOut: bigint;
-  readonly bridgeTransaction: string;
+  readonly bridgeTransaction: string | null;
   readonly splitTransaction: string;
   readonly settlementTransaction: string;
 }
@@ -93,6 +108,7 @@ export class WithdrawalWorkflow {
     private readonly executionGuard: FinancialExecutionGuardPort,
     private readonly walletCoordinator: WalletExecutionCoordinatorPort,
     private readonly faults: FaultInjectorPort = NOOP_FAULT_INJECTOR,
+    private readonly jupiter: JupiterExecutionPort | null = null,
   ) {}
 
   public async execute(request: WithdrawalWorkflowRequest): Promise<WithdrawalWorkflowResult> {
@@ -144,47 +160,111 @@ export class WithdrawalWorkflow {
       request.targets,
     );
     const orders: FakOrderResult[] = [];
+    const jupiterSwaps: JupiterExactInResult[] = [];
     for (let index = 0; index < allocations.length; index += 1) {
       const allocation = allocations[index];
       const source = request.targets[index];
       if (allocation === undefined || source === undefined || allocation.amountUnits === 0n) continue;
       assertLeaseActive(signal);
-      const order = await this.fak.executeFak({
-        clientOrderId: `${request.operationId}:sell:${index}`,
-        tokenId: allocation.tokenId,
-        side: "sell",
-        negativeRisk: source.negativeRisk,
-        amountUnits: allocation.amountUnits,
-        worstPriceUnits: source.worstSellPriceUnits,
-      });
-      orders.push(order);
-      await this.faults.after("withdrawal.fak_order_executed", {
-        operationId: request.operationId,
-        metadata: { clientOrderId: order.clientOrderId, orderId: order.orderId },
-      });
+      if (source.kind === "spot") {
+        if (this.jupiter === null) {
+          throw new Error("Jupiter execution is not configured for this spot or mixed basket");
+        }
+        const swap = await this.jupiter.executeExactIn({
+          idempotencyKey: `${request.operationId}:spot-sell:${index}`,
+          inputMint: new PublicKey(source.tokenMint),
+          outputMint: new PublicKey(request.solanaUsdcMint),
+          inputAmountUnits: allocation.amountUnits,
+          slippageBps: request.maxSlippageBps,
+          taker: new PublicKey(request.solanaSettlementReceiver),
+        });
+        if (
+          !swap.inputMint.equals(new PublicKey(source.tokenMint)) ||
+          !swap.outputMint.equals(new PublicKey(request.solanaUsdcMint)) ||
+          swap.requestedInputUnits !== allocation.amountUnits ||
+          swap.filledInputUnits <= 0n ||
+          swap.filledInputUnits > allocation.amountUnits
+        ) {
+          throw new Error("invalid Jupiter withdrawal fill");
+        }
+        jupiterSwaps.push(swap);
+        await this.faults.after("withdrawal.jupiter_swap_executed", {
+          operationId: request.operationId,
+          metadata: { transactionSignature: swap.transactionSignature },
+        });
+      } else {
+        const order = await this.fak.executeFak({
+          clientOrderId: `${request.operationId}:sell:${index}`,
+          tokenId: allocation.tokenId,
+          side: "sell",
+          negativeRisk: source.negativeRisk,
+          amountUnits: allocation.amountUnits,
+          worstPriceUnits: source.worstSellPriceUnits,
+        });
+        orders.push(order);
+        await this.faults.after("withdrawal.fak_order_executed", {
+          operationId: request.operationId,
+          metadata: { clientOrderId: order.clientOrderId, orderId: order.orderId },
+        });
+      }
     }
     const sellProceeds = orders.reduce((sum, order) => sum + order.filledOutputUnits, 0n);
     const idleAllocation = (request.idlePusdUnits * quote.shareAmount) / request.totalSharesOutstanding;
     const grossPusd = sellProceeds + idleAllocation;
-    if (grossPusd < quote.minimumGrossValue) {
+    const idleUsdcAllocation =
+      ((request.idleUsdcUnits ?? 0n) * quote.shareAmount) /
+      request.totalSharesOutstanding;
+    const spotProceeds = jupiterSwaps.reduce(
+      (sum, swap) => sum + swap.filledOutputUnits,
+      0n,
+    );
+    const preBridgeGross = grossPusd + spotProceeds + idleUsdcAllocation;
+    if (preBridgeGross < quote.minimumGrossValue) {
       throw new Error("partial FAK liquidation produced less than the signed minimum gross value");
     }
     if (operation.state === "intent_verified") {
       operation = await this.operations.transition(operation.id, operation.version, "trading_completed", {
         grossPusdUnits: grossPusd.toString(10),
         idlePusdUnits: idleAllocation.toString(10),
+        idleUsdcUnits: idleUsdcAllocation.toString(10),
         orderIds: orders.map((order) => order.orderId),
+        jupiterTransactions: jupiterSwaps.map((swap) => swap.transactionSignature),
       }, request.now);
     }
     let bridgeAddress: string;
-    let bridgeSourceTransaction: string;
+    let bridgeSourceTransaction: string | null;
     let bridgeObservedAtMs: bigint;
     let receipt: Readonly<{
       amountUnits: bigint;
-      transactionSignature: string;
+      transactionSignature: string | null;
       finalizedSlot: bigint;
     }>;
-    if (request.capitalMode === "prefunded_staging") {
+    if (grossPusd === 0n) {
+      bridgeAddress = "none";
+      bridgeSourceTransaction = null;
+      bridgeObservedAtMs = jupiterSwaps.reduce(
+        (latest, swap) => swap.executedAtMs > latest ? swap.executedAtMs : latest,
+        BigInt(request.now.getTime()),
+      );
+      if (operation.state === "trading_completed") {
+        operation = await this.operations.transition(
+          operation.id,
+          operation.version,
+          "bridge_pending",
+          {
+            ...operation.checkpoint,
+            bridgeAddress,
+            bridgeObservedAtMs: bridgeObservedAtMs.toString(10),
+          },
+          request.now,
+        );
+      }
+      receipt = Object.freeze({
+        amountUnits: 0n,
+        transactionSignature: null,
+        finalizedSlot: 0n,
+      });
+    } else if (request.capitalMode === "prefunded_staging") {
       bridgeAddress = `prefunded:${request.operationId}`;
       bridgeSourceTransaction = `prefunded-pusd:${request.operationId}`;
       const storedObservedAtMs = operation.checkpoint.bridgeObservedAtMs;
@@ -267,14 +347,19 @@ export class WithdrawalWorkflow {
         destinationTransactionHash: completed.destinationTxHash,
       });
     }
-    if (receipt.amountUnits < quote.minimumGrossValue || receipt.amountUnits > grossPusd) {
-      throw new Error("bridged USDC amount is outside the signed withdrawal bounds");
+    if (receipt.amountUnits > grossPusd) {
+      throw new Error("bridged USDC amount exceeds the liquidated Polymarket value");
+    }
+    const grossRealized = receipt.amountUnits + spotProceeds + idleUsdcAllocation;
+    if (grossRealized < quote.minimumGrossValue || grossRealized > preBridgeGross) {
+      throw new Error("hybrid realized USDC amount is outside the signed withdrawal bounds");
     }
     if (operation.state === "bridge_pending") {
       operation = await this.operations.transition(operation.id, operation.version, "bridge_completed", {
         ...operation.checkpoint,
-        bridgeTransaction: receipt.transactionSignature,
+        bridgeTransaction: receipt.transactionSignature ?? "none",
         receivedUsdcUnits: receipt.amountUnits.toString(10),
+        receivedJupiterUsdcUnits: spotProceeds.toString(10),
       }, request.now);
     }
     const nowSeconds = BigInt(Math.floor(request.now.getTime() / 1_000));
@@ -285,13 +370,13 @@ export class WithdrawalWorkflow {
       valueForShares(quote.shareAmount, pricing.sharePrice),
       request.maxSlippageBps,
     );
-    if (receipt.amountUnits < currentMinimumGross) throw new Error("withdrawal execution is below the refreshed on-chain slippage floor");
+    if (grossRealized < currentMinimumGross) throw new Error("withdrawal execution is below the refreshed on-chain slippage floor");
     const fees = calculateWithdrawalSettlement(
       request.positionCostBasisValue,
       request.positionSharesOwned,
       request.weightedDepositTimestamp,
       quote.shareAmount,
-      receipt.amountUnits,
+      grossRealized,
       nowSeconds,
       request.performanceFeeBps,
     );
@@ -300,6 +385,9 @@ export class WithdrawalWorkflow {
     const split = await this.splitter.distribute({
       idempotencyKey: `${request.operationId}:fee-split`,
       sourceBridgeTransaction: receipt.transactionSignature,
+      sourceBridgeAmountUnits: receipt.amountUnits,
+      sourceJupiterTransactions: jupiterSwaps.map((swap) => swap.transactionSignature),
+      idleUsdcAmountUnits: idleUsdcAllocation,
       mint: request.solanaUsdcMint,
       userDestination: request.intent.destination.toBase58(),
       creatorDestination: request.creatorDestination,
@@ -314,7 +402,10 @@ export class WithdrawalWorkflow {
     });
     const executedAt = orders.reduce(
       (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
-      bridgeObservedAtMs,
+      jupiterSwaps.reduce(
+        (latest, swap) => swap.executedAtMs > latest ? swap.executedAtMs : latest,
+        bridgeObservedAtMs,
+      ),
     ) / 1_000n;
     assertExecutionTimestamp(executedAt, nowSeconds);
     const batch = executionBatchHash({
@@ -324,10 +415,12 @@ export class WithdrawalWorkflow {
       navReportHash: Buffer.from(pricing.navReportHash).toString("hex"),
       settlementNonce: request.settlementNonce,
       executedAtSeconds: executedAt,
-      bridgeSourceTxHash: bridgeSourceTransaction,
-      bridgeDestinationTxHash: receipt.transactionSignature,
+      ...(bridgeSourceTransaction === null ? {} : { bridgeSourceTxHash: bridgeSourceTransaction }),
+      ...(receipt.transactionSignature === null ? {} : { bridgeDestinationTxHash: receipt.transactionSignature }),
       idlePusdUnits: idleAllocation,
+      idleUsdcUnits: idleUsdcAllocation,
       orders,
+      jupiterSwaps,
     });
     assertLeaseActive(signal);
     const completedSettlement = await this.settlement.completeWithdrawal({
@@ -338,7 +431,7 @@ export class WithdrawalWorkflow {
       settlementNonce: request.settlementNonce,
       basketNavValue: pricing.basketNavValue,
       sharePrice: pricing.sharePrice,
-      grossRealizedValue: receipt.amountUnits,
+      grossRealizedValue: grossRealized,
       protocolFee: fees.protocolFee,
       creatorFee: fees.creatorFee,
       userValueOut: fees.userValueOut,
@@ -362,7 +455,9 @@ export class WithdrawalWorkflow {
       operation,
       executionBatchHash: batch.toString("hex"),
       orders: Object.freeze(orders),
-      grossRealizedValue: receipt.amountUnits,
+      jupiterSwaps: Object.freeze(jupiterSwaps),
+      idleUsdcConsumed: idleUsdcAllocation,
+      grossRealizedValue: grossRealized,
       protocolFee: fees.protocolFee,
       creatorFee: fees.creatorFee,
       userValueOut: fees.userValueOut,

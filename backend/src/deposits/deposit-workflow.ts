@@ -2,6 +2,11 @@ import { calculateDepositSettlement } from "../accounting/math.js";
 import { executionBatchHash, executionRequestHash } from "../execution/hashes.js";
 import { allocateDepositPusd, type WeightedExecutionTarget } from "../execution/allocation.js";
 import type {
+  JupiterExactInResult,
+  JupiterExecutionPort,
+} from "../jupiter/index.js";
+import { PublicKey } from "@solana/web3.js";
+import type {
   ExecutionOperation,
   ExecutionOperationStore,
   FakExecutionPort,
@@ -47,13 +52,18 @@ export interface DepositWorkflowRequest {
   readonly preparedBridgeAddress: string;
   readonly solanaUsdcMint: string;
   readonly protocolFeeDestination: string;
+  readonly spotFundingDestination?: string;
   readonly fundingTransactionSignature: string;
   readonly maxSlippageBps: number;
   readonly targets: readonly (
-    WeightedExecutionTarget & {
+    WeightedExecutionTarget & ({
+      readonly kind?: "prediction_market";
       readonly worstBuyPriceUnits: bigint;
       readonly negativeRisk: boolean;
-    }
+    } | {
+      readonly kind: "spot";
+      readonly tokenMint: string;
+    })
   )[];
   readonly settlementNonce: bigint;
   /** Optional local/staging execution path; hybrid_devnet uses live_bridge. */
@@ -69,7 +79,9 @@ export interface DepositWorkflowResult {
   readonly operation: ExecutionOperation;
   readonly executionBatchHash: string;
   readonly orders: readonly FakOrderResult[];
+  readonly jupiterSwaps: readonly JupiterExactInResult[];
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits: bigint;
   readonly netDepositValue: bigint;
   readonly sharesCredited: bigint;
   readonly settlementTransaction: string;
@@ -87,6 +99,7 @@ export class DepositWorkflow {
     private readonly executionGuard: FinancialExecutionGuardPort,
     private readonly walletCoordinator: WalletExecutionCoordinatorPort,
     private readonly faults: FaultInjectorPort = NOOP_FAULT_INJECTOR,
+    private readonly jupiter: JupiterExecutionPort | null = null,
   ) {}
 
   public async prepare(request: {
@@ -168,13 +181,34 @@ export class DepositWorkflow {
     let operation = prepared.operation;
     const quote = request.intent.quote;
     assertLeaseActive(signal);
-    await this.funding.verifyFinalizedTransfer({
-      signature: request.fundingTransactionSignature,
-      expectedUser: quote.user.toBase58(),
-      expectedBridgeAddress: prepared.bridgeAddress,
-      expectedMint: request.solanaUsdcMint,
-      expectedAmountUnits: quote.quotedNetValue,
-    });
+    const requestedAllocation = allocateDepositPusd(quote.quotedNetValue, request.targets);
+    const predictionFunding = requestedAllocation.targets.reduce(
+      (sum, target, index) =>
+        request.targets[index]?.kind === "spot" ? sum : sum + target.amountUnits,
+      0n,
+    );
+    const spotFunding = quote.quotedNetValue - predictionFunding;
+    if (predictionFunding > 0n) {
+      await this.funding.verifyFinalizedTransfer({
+        signature: request.fundingTransactionSignature,
+        expectedUser: quote.user.toBase58(),
+        expectedBridgeAddress: prepared.bridgeAddress,
+        expectedMint: request.solanaUsdcMint,
+        expectedAmountUnits: predictionFunding,
+      });
+    }
+    if (spotFunding > 0n) {
+      if (request.spotFundingDestination === undefined) {
+        throw new Error("spot or mixed deposit is missing its mainnet funding destination");
+      }
+      await this.funding.verifyFinalizedTransfer({
+        signature: request.fundingTransactionSignature,
+        expectedUser: quote.user.toBase58(),
+        expectedBridgeAddress: request.spotFundingDestination,
+        expectedMint: request.solanaUsdcMint,
+        expectedAmountUnits: spotFunding,
+      });
+    }
     await this.funding.verifyFinalizedTransfer({
       signature: request.fundingTransactionSignature,
       expectedUser: quote.user.toBase58(),
@@ -186,6 +220,8 @@ export class DepositWorkflow {
       operation = await this.operations.transition(operation.id, operation.version, "funding_verified", {
         ...operation.checkpoint,
         fundingSignature: request.fundingTransactionSignature,
+        predictionFundingUnits: predictionFunding.toString(10),
+        spotFundingUnits: spotFunding.toString(10),
       }, request.now);
     }
     if (operation.state === "funding_verified") {
@@ -194,8 +230,12 @@ export class DepositWorkflow {
     let credited: bigint;
     let bridgeDestinationTxHash: string;
     let bridgeObservedAtMs: bigint;
-    if (request.capitalMode === "prefunded_staging") {
-      credited = quote.quotedNetValue;
+    if (predictionFunding === 0n) {
+      credited = 0n;
+      bridgeDestinationTxHash = "none";
+      bridgeObservedAtMs = BigInt(request.now.getTime());
+    } else if (request.capitalMode === "prefunded_staging") {
+      credited = predictionFunding;
       bridgeDestinationTxHash = `prefunded:${request.operationId}`;
       const storedObservedAtMs = operation.checkpoint.bridgeObservedAtMs;
       bridgeObservedAtMs = typeof storedObservedAtMs === "string"
@@ -207,7 +247,7 @@ export class DepositWorkflow {
       const preparedAtMs = BigInt(prepared.operation.createdAt.getTime());
       const completed = observations.find((item) =>
         item.status === "COMPLETED" &&
-        item.inputAmountUnits === quote.quotedNetValue &&
+        item.inputAmountUnits === predictionFunding &&
         item.observedAtMs >= preparedAtMs,
       );
       if (completed === undefined) {
@@ -224,10 +264,10 @@ export class DepositWorkflow {
       const credit = await this.creditVerifier.verifyPusdCredit({
         destinationTransactionHash: completed.destinationTxHash,
         polymarketWallet: request.polymarketWallet,
-        expectedMaximumUnits: quote.quotedNetValue,
+        expectedMaximumUnits: predictionFunding,
       });
       credited = credit.amountUnits;
-      if (credited <= 0n || credited > quote.quotedNetValue) throw new Error("verified Polymarket pUSD credit is outside the deposit bounds");
+      if (credited <= 0n || credited > predictionFunding) throw new Error("verified Polymarket pUSD credit is outside the deposit bounds");
     }
     if (operation.state === "bridge_pending") {
       operation = await this.operations.transition(operation.id, operation.version, "bridge_completed", {
@@ -237,11 +277,26 @@ export class DepositWorkflow {
         creditedPusdUnits: credited.toString(10),
       }, request.now);
     }
-    const allocation = allocateDepositPusd(credited, request.targets);
+    const predictionTargets = request.targets.filter(
+      (target) => target.kind !== "spot",
+    );
+    const predictionRequestedTargets = requestedAllocation.targets.filter(
+      (_target, index) => request.targets[index]?.kind !== "spot",
+    );
+    const allocation = Object.freeze({
+      targets: Object.freeze(predictionRequestedTargets.map((target) =>
+        Object.freeze({
+          ...target,
+          amountUnits: predictionFunding === 0n
+            ? 0n
+            : (target.amountUnits * credited) / predictionFunding,
+        }),
+      )),
+    });
     const orders: FakOrderResult[] = [];
     for (let index = 0; index < allocation.targets.length; index += 1) {
       const target = allocation.targets[index];
-      const source = request.targets[index];
+      const source = predictionTargets[index];
       if (target === undefined || source === undefined || target.amountUnits === 0n) continue;
       assertLeaseActive(signal);
       const order = await this.fak.executeFak({
@@ -261,11 +316,58 @@ export class DepositWorkflow {
     const spent = orders.reduce((sum, order) => sum + order.filledInputUnits, 0n);
     if (spent > credited) throw new Error("FAK buys spent more pUSD than the bridge credited");
     const idlePusdUnits = credited - spent;
+    const spotTargets = requestedAllocation.targets.flatMap((target, index) => {
+      const source = request.targets[index];
+      return source?.kind === "spot"
+        ? [Object.freeze({ source, amountUnits: target.amountUnits })]
+        : [];
+    });
+    if (spotTargets.length > 0 && this.jupiter === null) {
+      throw new Error("Jupiter execution is not configured for this spot or mixed basket");
+    }
+    const jupiterSwaps: JupiterExactInResult[] = [];
+    for (let index = 0; index < spotTargets.length; index += 1) {
+      const target = spotTargets[index];
+      if (target === undefined || target.amountUnits === 0n) continue;
+      assertLeaseActive(signal);
+      const swap = await (this.jupiter as JupiterExecutionPort).executeExactIn({
+        idempotencyKey: `${request.operationId}:spot-buy:${index}`,
+        inputMint: new PublicKey(request.solanaUsdcMint),
+        outputMint: new PublicKey(target.source.tokenMint),
+        inputAmountUnits: target.amountUnits,
+        slippageBps: request.maxSlippageBps,
+        taker: new PublicKey(request.spotFundingDestination as string),
+      });
+      if (
+        !swap.inputMint.equals(new PublicKey(request.solanaUsdcMint)) ||
+        !swap.outputMint.equals(new PublicKey(target.source.tokenMint)) ||
+        swap.requestedInputUnits !== target.amountUnits ||
+        swap.filledInputUnits <= 0n ||
+        swap.filledInputUnits > target.amountUnits
+      ) {
+        throw new Error("invalid Jupiter deposit fill");
+      }
+      jupiterSwaps.push(swap);
+      await this.faults.after("deposit.jupiter_swap_executed", {
+        operationId: request.operationId,
+        metadata: { transactionSignature: swap.transactionSignature },
+      });
+    }
+    const spentUsdc = jupiterSwaps.reduce(
+      (sum, swap) => sum + swap.filledInputUnits,
+      0n,
+    );
+    if (spentUsdc > spotFunding) {
+      throw new Error("Jupiter buys spent more USDC than the deposit funded");
+    }
+    const idleUsdcUnits = spotFunding - spentUsdc;
     if (operation.state === "bridge_completed") {
       operation = await this.operations.transition(operation.id, operation.version, "trading_completed", {
         ...operation.checkpoint,
         idlePusdUnits: idlePusdUnits.toString(10),
+        idleUsdcUnits: idleUsdcUnits.toString(10),
         orderIds: orders.map((order) => order.orderId),
+        jupiterTransactions: jupiterSwaps.map((swap) => swap.transactionSignature),
       }, request.now);
     }
     assertLeaseActive(signal);
@@ -275,7 +377,7 @@ export class DepositWorkflow {
     if (request.maxSlippageBps !== quote.maxSlippageBps) throw new Error("deposit slippage policy differs from the signed quote");
     const math = calculateDepositSettlement(
       quote.grossAmount,
-      credited,
+      credited + spotFunding,
       pricing.sharePrice,
       request.maxSlippageBps,
     );
@@ -283,7 +385,10 @@ export class DepositWorkflow {
     if (math.sharesCredited < quote.minSharesOut) throw new Error("executed deposit credits fewer than the user-authorized minimum shares");
     const executedAt = orders.reduce(
       (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
-      bridgeObservedAtMs,
+      jupiterSwaps.reduce(
+        (latest, swap) => swap.executedAtMs > latest ? swap.executedAtMs : latest,
+        bridgeObservedAtMs,
+      ),
     ) / 1_000n;
     assertExecutionTimestamp(executedAt, nowSeconds);
     const batch = executionBatchHash({
@@ -296,7 +401,9 @@ export class DepositWorkflow {
       bridgeSourceTxHash: request.fundingTransactionSignature,
       bridgeDestinationTxHash,
       idlePusdUnits,
+      idleUsdcUnits,
       orders,
+      jupiterSwaps,
     });
     assertLeaseActive(signal);
     const result = await this.settlement.completeDeposit({
@@ -307,7 +414,7 @@ export class DepositWorkflow {
       settlementNonce: request.settlementNonce,
       basketNavValue: pricing.basketNavValue,
       sharePrice: pricing.sharePrice,
-      netDepositValue: credited,
+      netDepositValue: credited + spotFunding,
       sharesCredited: math.sharesCredited,
       protocolFee: quote.protocolFee,
     });
@@ -329,8 +436,10 @@ export class DepositWorkflow {
       operation,
       executionBatchHash: batch.toString("hex"),
       orders: Object.freeze(orders),
+      jupiterSwaps: Object.freeze(jupiterSwaps),
       idlePusdUnits,
-      netDepositValue: credited,
+      idleUsdcUnits,
+      netDepositValue: credited + spotFunding,
       sharesCredited: math.sharesCredited,
       settlementTransaction: result.transactionSignature,
     });

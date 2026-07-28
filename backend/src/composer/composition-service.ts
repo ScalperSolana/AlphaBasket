@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PublicKey } from "@solana/web3.js";
 import {
   canonicalCompositionBytes,
   canonicalEligibilityBytes,
@@ -9,6 +10,7 @@ import {
 } from "../contract/composition.js";
 import {
   MAX_SINGLE_SOURCE_WEIGHT_BPS,
+  MAX_MIXED_WEIGHT_BPS,
   MAX_BPS,
 } from "../contract/constants.js";
 import {
@@ -21,6 +23,8 @@ import type {
   ComposerCandidate,
   ComposerPolicy,
   CreatorMarketWeight,
+  SpotCompositionSelection,
+  SpotWeightedCompositionItem,
   WeightedCompositionItem,
 } from "./types.js";
 
@@ -51,7 +55,7 @@ const creatorWeightKey = (weight: CreatorMarketWeight): string =>
 const auditHash = (
   composedAtMs: bigint,
   eligibleMarkets: readonly EligibleMarket[],
-  items: readonly WeightedCompositionItem[],
+  items: readonly (WeightedCompositionItem | SpotWeightedCompositionItem)[],
 ): string => {
   const canonical = JSON.stringify([
     "ALPHABASKET_COMPOSITION_V2",
@@ -63,9 +67,9 @@ const auditHash = (
     ]),
     items.map((item) => [
       item.marketId,
-      item.conditionId,
+      item.assetKind === "spot" ? item.tokenMint.toBase58() : item.conditionId,
       item.tokenId,
-      item.outcomeIndex,
+      item.assetKind === "spot" ? "spot" : item.outcomeIndex,
       item.weightBps,
     ]),
   ]);
@@ -78,19 +82,20 @@ export class BasketCompositionService {
     creatorWeights: readonly CreatorMarketWeight[],
     policy: ComposerPolicy,
     composedAtMs: bigint,
+    spotSelections: readonly SpotCompositionSelection[] = [],
   ): BasketComposition {
     validateComposerPolicy(policy);
     const filtered = filterComposerCandidates(candidates, policy, composedAtMs);
     const eligibleCandidates = filtered.accepted.slice(0, policy.maxMarkets);
-    if (eligibleCandidates.length < policy.minMarkets) {
+    if (eligibleCandidates.length + spotSelections.length < policy.minMarkets) {
       throw new InsufficientEligibleMarketsError(
-        eligibleCandidates.length,
+        eligibleCandidates.length + spotSelections.length,
         policy.minMarkets,
       );
     }
     if (
-      creatorWeights.length < policy.minMarkets ||
-      creatorWeights.length > policy.maxMarkets
+      creatorWeights.length + spotSelections.length < policy.minMarkets ||
+      creatorWeights.length + spotSelections.length > policy.maxMarkets
     ) {
       throw new RangeError(
         `creator must select ${policy.minMarkets}-${policy.maxMarkets} eligible markets`,
@@ -104,6 +109,10 @@ export class BasketCompositionService {
       ]),
     );
     const selectedKeys = new Set<string>();
+    const mixed = creatorWeights.length > 0 && spotSelections.length > 0;
+    const maximumWeight = mixed
+      ? MAX_MIXED_WEIGHT_BPS
+      : MAX_SINGLE_SOURCE_WEIGHT_BPS;
     let totalWeight = 0;
     for (const weight of creatorWeights) {
       if (
@@ -112,10 +121,10 @@ export class BasketCompositionService {
         (weight.outcomeIndex !== 0 && weight.outcomeIndex !== 1) ||
         !Number.isSafeInteger(weight.weightBps) ||
         weight.weightBps <= 0 ||
-        weight.weightBps > MAX_SINGLE_SOURCE_WEIGHT_BPS
+        weight.weightBps > maximumWeight
       ) {
         throw new TypeError(
-          `creator weight must be an eligible market with 1-${MAX_SINGLE_SOURCE_WEIGHT_BPS} bps`,
+          `creator weight must be an eligible market with 1-${maximumWeight} bps`,
         );
       }
       const key = creatorWeightKey(weight);
@@ -127,6 +136,33 @@ export class BasketCompositionService {
       }
       selectedKeys.add(key);
       totalWeight += weight.weightBps;
+    }
+    const selectedSpotMints = new Set<string>();
+    const selectedMarketIds = new Set(creatorWeights.map((weight) => weight.marketId));
+    for (const spot of spotSelections) {
+      const mint = spot.tokenMint.toBase58();
+      if (
+        typeof spot.marketId !== "string" ||
+        Buffer.byteLength(spot.marketId, "utf8") === 0 ||
+        Buffer.byteLength(spot.marketId, "utf8") > 64 ||
+        spot.tokenMint.equals(PublicKey.default) ||
+        !Number.isInteger(spot.tokenDecimals) ||
+        spot.tokenDecimals < 0 ||
+        spot.tokenDecimals > 18 ||
+        !Number.isSafeInteger(spot.weightBps) ||
+        spot.weightBps <= 0 ||
+        spot.weightBps > maximumWeight ||
+        spot.initialMarkPriceUnits <= 0n ||
+        !/^[0-9a-f]{64}$/u.test(spot.markSourceHash)
+      ) {
+        throw new TypeError(`spot selection must satisfy the 1-${maximumWeight} bps composition policy`);
+      }
+      if (selectedSpotMints.has(mint) || selectedMarketIds.has(spot.marketId)) {
+        throw new RangeError("composition contains a duplicate spot mint or market ID");
+      }
+      selectedSpotMints.add(mint);
+      selectedMarketIds.add(spot.marketId);
+      totalWeight += spot.weightBps;
     }
     if (totalWeight !== MAX_BPS) {
       throw new RangeError(`creator weights must total ${MAX_BPS} bps`);
@@ -149,7 +185,7 @@ export class BasketCompositionService {
         weight.weightBps,
       ]),
     );
-    const items: WeightedCompositionItem[] = eligibleCandidates
+    const predictionItems: WeightedCompositionItem[] = eligibleCandidates
       .filter((candidate) => selectedKeys.has(composerCandidateKey(candidate)))
       .map((candidate) => {
         const weightBps = weights.get(composerCandidateKey(candidate));
@@ -157,6 +193,7 @@ export class BasketCompositionService {
           throw new Error(`Missing creator weight for ${composerCandidateKey(candidate)}`);
         }
         return Object.freeze({
+          assetKind: "prediction_market" as const,
           marketId: candidate.marketId,
           conditionId: candidate.conditionId,
           eventId: candidate.eventId,
@@ -168,8 +205,33 @@ export class BasketCompositionService {
           initialMarkPriceUnits: candidate.midpointPriceUnits,
         });
       });
+    const spotItems: SpotWeightedCompositionItem[] = [...spotSelections]
+      .sort((left, right) =>
+        left.marketId.localeCompare(right.marketId, "en") ||
+        left.tokenMint.toBase58().localeCompare(right.tokenMint.toBase58(), "en"),
+      )
+      .map((spot) => Object.freeze({
+        assetKind: "spot" as const,
+        marketId: spot.marketId,
+        tokenId: spot.tokenMint.toBase58(),
+        tokenMint: spot.tokenMint,
+        tokenDecimals: spot.tokenDecimals,
+        outcomeLabel: "spot" as const,
+        weightBps: spot.weightBps,
+        initialMarkPriceUnits: spot.initialMarkPriceUnits,
+        markSourceHash: spot.markSourceHash,
+      }));
+    const items = Object.freeze([...predictionItems, ...spotItems]);
     const assets: BasketAsset[] = items.map((item) =>
-      Object.freeze({
+      item.assetKind === "spot"
+        ? Object.freeze({
+            marketId: item.marketId,
+            kind: Object.freeze({
+              spot: Object.freeze({ tokenMint: item.tokenMint }),
+            }),
+            weightBps: item.weightBps,
+          })
+        : Object.freeze({
         marketId: item.marketId,
         kind: Object.freeze({
           predictionMarket: Object.freeze({

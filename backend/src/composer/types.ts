@@ -66,6 +66,7 @@ export interface ComposerPolicy {
 }
 
 export interface WeightedCompositionItem {
+  readonly assetKind?: "prediction_market";
   readonly marketId: string;
   readonly conditionId: string;
   readonly eventId: string | null;
@@ -76,6 +77,28 @@ export interface WeightedCompositionItem {
   readonly weightBps: number;
   /** Initial off-chain mark only; it is not signed into the on-chain composition. */
   readonly initialMarkPriceUnits: bigint;
+}
+
+export interface SpotCompositionSelection {
+  readonly marketId: string;
+  readonly tokenMint: PublicKey;
+  readonly tokenDecimals: number;
+  readonly symbol: string;
+  readonly weightBps: number;
+  readonly initialMarkPriceUnits: bigint;
+  readonly markSourceHash: string;
+}
+
+export interface SpotWeightedCompositionItem {
+  readonly assetKind: "spot";
+  readonly marketId: string;
+  readonly tokenId: string;
+  readonly tokenMint: PublicKey;
+  readonly tokenDecimals: number;
+  readonly outcomeLabel: "spot";
+  readonly weightBps: number;
+  readonly initialMarkPriceUnits: bigint;
+  readonly markSourceHash: string;
 }
 
 export interface BasketComposition {
@@ -89,7 +112,7 @@ export interface BasketComposition {
   readonly eligibleMarkets: readonly EligibleMarket[];
   readonly auditHash: string;
   readonly composedAtMs: bigint;
-  readonly items: readonly WeightedCompositionItem[];
+  readonly items: readonly (WeightedCompositionItem | SpotWeightedCompositionItem)[];
   readonly assets: readonly BasketAsset[];
   readonly rejected: readonly RejectedCandidate[];
 }
@@ -144,10 +167,12 @@ export interface SolanaBasketCreationResult {
   readonly compositionHash: string;
   /** Off-chain execution metadata used to initialize the basket portfolio projection. */
   readonly portfolioItems: readonly Readonly<{
+    readonly assetKind?: "prediction_market" | "spot";
     readonly marketId: string;
-    readonly conditionId: string;
+    readonly conditionId?: string;
     readonly tokenId: string;
     readonly outcome: string;
+    readonly tokenDecimals?: number;
     readonly initialMarkPriceUnits: bigint;
     readonly markObservedAtMs: bigint;
     readonly markSourceHash: string;

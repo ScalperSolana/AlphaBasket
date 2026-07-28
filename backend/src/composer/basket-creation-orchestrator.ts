@@ -12,6 +12,7 @@ import type {
   CompositionSigningPayload,
   SolanaBasketCreationGatewayPort,
   SolanaBasketCreationResult,
+  SpotCompositionSelection,
 } from "./types.js";
 
 export interface ComposeAndCreateBasketCommand {
@@ -26,6 +27,7 @@ export interface ComposeAndCreateBasketCommand {
   readonly performanceFeeBps?: number;
   readonly candidates: readonly ComposerCandidate[];
   readonly creatorWeights: readonly CreatorMarketWeight[];
+  readonly spotSelections?: readonly SpotCompositionSelection[];
   readonly policy: ComposerPolicy;
 }
 
@@ -77,6 +79,7 @@ export class BasketCreationOrchestrator {
       command.creatorWeights,
       command.policy,
       this.clock.nowMs(),
+      command.spotSelections ?? [],
     );
     const payload: CompositionSigningPayload = Object.freeze({
       basketId: Uint8Array.from(command.basketId),

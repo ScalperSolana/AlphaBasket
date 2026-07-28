@@ -220,15 +220,27 @@ export class AnchorBasketCreationGateway
       compositionHash: request.payload.composition.hash,
       portfolioItems: Object.freeze(
         request.payload.composition.items.map((item) =>
-          Object.freeze({
-            marketId: item.marketId,
-            conditionId: item.conditionId,
-            tokenId: item.tokenId,
-            outcome: item.outcomeLabel,
-            initialMarkPriceUnits: item.initialMarkPriceUnits,
-            markObservedAtMs: request.payload.composition.composedAtMs,
-            markSourceHash: `composer:${request.payload.composition.auditHash}:${item.tokenId}`,
-          }),
+          item.assetKind === "spot"
+            ? Object.freeze({
+                assetKind: "spot" as const,
+                marketId: item.marketId,
+                tokenId: item.tokenId,
+                outcome: item.outcomeLabel,
+                tokenDecimals: item.tokenDecimals,
+                initialMarkPriceUnits: item.initialMarkPriceUnits,
+                markObservedAtMs: request.payload.composition.composedAtMs,
+                markSourceHash: item.markSourceHash,
+              })
+            : Object.freeze({
+                assetKind: "prediction_market" as const,
+                marketId: item.marketId,
+                conditionId: item.conditionId,
+                tokenId: item.tokenId,
+                outcome: item.outcomeLabel,
+                initialMarkPriceUnits: item.initialMarkPriceUnits,
+                markObservedAtMs: request.payload.composition.composedAtMs,
+                markSourceHash: `composer:${request.payload.composition.auditHash}:${item.tokenId}`,
+              }),
         ),
       ),
     });
