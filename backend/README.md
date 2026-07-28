@@ -6,7 +6,7 @@ The design follows three rules:
 
 1. PostgreSQL is authoritative for backend workflows and the virtual portfolio ledger.
 2. Solana accounts and immutable settlement receipts are authoritative for share accounting.
-3. Polymarket/Polygon balances and fills are independently reconciled against the virtual ledger.
+3. Polymarket/Polygon and Jupiter/Solana-mainnet balances and fills are independently reconciled against the virtual ledger.
 
 ## Commands
 
@@ -100,14 +100,28 @@ mainnet. Every public-network process checks the RPC's genesis hash at startup,
 so swapping or mislabelling the devnet/mainnet endpoints fails closed. The
 devnet program never receives, holds, or distributes funds.
 
+When `JUPITER_SPOT_ENABLED=true`, spot execution uses the same hybrid boundary.
+The execution gateway requests an official Jupiter Swap V2 order, journals and
+signs the returned versioned transaction through the `solana_settlement` signer,
+and submits it on mainnet-beta. Before accepting a fill, it independently loads
+the finalized transaction from the capital RPC and reconciles the configured
+wallet's input/output SPL-token deltas. Only the resulting accounting
+attestation is recorded by `complete_*` on devnet; the program does not invoke
+Jupiter by CPI. Native-SOL unwrap routes fail closed because spot custody and
+reconciliation currently require an observable SPL-token balance. The
+settlement signing policy also requires exactly one signer and permits only the
+configured Jupiter aggregator, compute-budget and associated-token programs as
+top-level instructions; a Jupiter router/program change requires an explicit
+configuration review.
+
 The execution gateway is a separate authenticated service on port `3002` by
 default. It holds no raw keys itself: it requests narrowly policy-checked
 secp256k1/Ed25519 signatures from the configured remote signer. It journals
 the exact signed payload before broadcasting, creates authenticated CLOB v2 FAK
-orders, signs Polygon pUSD withdrawal transfers, and constructs the canonical
-Solana-mainnet `TransferChecked` distribution transaction. CLOB API credentials
-remain inside this service and are not exposed to the HTTP API or Temporal
-workers.
+orders, signs Polygon pUSD withdrawal transfers, signs official Jupiter Swap V2
+transactions, and constructs the canonical Solana-mainnet `TransferChecked`
+distribution transaction. CLOB and Jupiter credentials remain inside this
+service and are not exposed to the HTTP API or Temporal workers.
 
 ### Remote signer for internal testing
 
@@ -180,23 +194,26 @@ and fetches the protected JSON feed without embedding that token in a URL.
 - `remote-signer`: authenticated signing API and loopback development key provider.
 - `indexer`: Solana account and event read plane.
 - `polymarket`: market data, CLOB execution, Data API positions, relayer, and CTF redemption encoding.
+- `jupiter`: verified token admission, Swap V2 execution and Price V3 marks.
 - `nav`: immutable off-chain NAV snapshots.
 - `wallets`: sticky basket-to-execution-wallet allocation.
 - `composer`: deterministic composition and basket-creation orchestration.
 - `quotes`: short-lived NAV quotes and exact Ed25519 user-intent verification.
 - `execution`: durable execution state machine, versioned attestations and allocation math.
-- `deposits`: finalized Solana funding, Polymarket bridge, FAK buys, idle pUSD and `complete_deposit`.
-- `withdrawals`: proportional FAK liquidation, bridge receipt, fee split, user withdrawal and protocol-share redemption.
+- `deposits`: finalized mainnet funding, Polymarket FAK buys, Jupiter spot buys, both idle assets and `complete_deposit`.
+- `withdrawals`: proportional FAK/Jupiter liquidation, optional bridge receipt, fee split, user withdrawal and protocol-share redemption.
 - `settlement`: fresh-NAV loading and replay-safe Anchor `complete_*` submission.
 - `runtime`: independently verifies Solana token deltas and Polygon pUSD credits.
 - `lifecycle`: leased management-fee keeper, KMS-journaled Solana submission,
-  FAK reconstitution, condition-level CTF redemption, resumable resolution and final settlement.
+  hybrid FAK/Jupiter reconstitution, condition-level CTF redemption, resumable resolution and final settlement.
 - `reconciliation`: immutable cross-system snapshots, findings, outbox alerts and authenticated operations reads.
 - `resilience`: deterministic fault injection and bounded provider timeout/retry policies.
 - `operations`: environment guards and append-only low-value production-canary budgets.
 - `workers`: non-overlapping periodic task runner for lifecycle and reconciliation replicas.
 
-No monetary value is represented as a JavaScript `number`; base-unit amounts use `bigint`.
+All accounting and base-unit amounts use `bigint`. Provider price observations
+that arrive as JSON numbers are normalized immediately to six-decimal integer
+marks and are never used as floating-point ledger balances.
 Every side-effecting workflow holds an exclusive renewable lease for its
 execution wallet. Capacity scales by assigning new baskets to additional wallet
 shards, never by running concurrent mutations against one wallet.
@@ -207,19 +224,25 @@ All user-facing financial requests are keyed by an idempotency key and an exact
 request hash. External side effects use deterministic operation-derived IDs, and
 on-chain settlement receipts make repeated `complete_*` submissions safe.
 
-Deposit execution verifies the user's finalized Solana-mainnet USDC transfers, follows
-the bridge credit into the configured Polymarket execution wallet, performs FAK
-buys, leaves unfilled pUSD attributed to the basket, reloads a fresh NAV snapshot,
-then calls `complete_deposit` with the user-signed intent and versioned execution
-attestation on Solana devnet.
+Deposit execution verifies one finalized Solana-mainnet funding transaction.
+Prediction allocation goes to the Polymarket bridge, spot allocation goes to the
+mainnet settlement wallet, and the deposit fee goes to the protocol. The worker
+performs prediction FAK buys and Jupiter spot buys, retaining unspent pUSD and
+USDC under basket attribution, then calls `complete_deposit` on devnet.
 
-Withdrawal execution sells the basket pro rata with FAK orders, includes the
-redeemed share of idle pUSD, bridges the realized proceeds to a Solana-mainnet
-settlement wallet, verifies the finalized USDC receipt through the capital RPC,
-atomically splits user/creator/protocol amounts on mainnet, then calls
-`complete_withdrawal` on devnet. Management-share redemption uses the same
-liquidation and bridge path but sends the realized value only to the protocol
-before calling `complete_protocol_fee_withdrawal`.
+Withdrawal execution sells the basket pro rata with prediction FAK orders and
+Jupiter spot-to-USDC swaps. It includes the redeemed shares of idle pUSD and
+idle USDC, bridges only Polygon proceeds, verifies every capital source,
+atomically splits user/creator/protocol USDC on mainnet, and calls
+`complete_withdrawal` on devnet. A spot-only withdrawal does not invoke the
+Polymarket bridge. Protocol-share redemption follows the same hybrid path.
+
+NAV uses CLOB marks for prediction positions and Jupiter Price V3 for verified
+spot mints. Reconciliation compares pUSD, CTF positions, mainnet USDC and SPL
+balances with basket attribution. Reconstitution executes both venue types and
+persists actual partial fills. It currently does not bridge value between
+Polygon and Solana during reconstitution, so a change in the aggregate
+venue-level target can remain as an explicit allocation deviation.
 
 Quotes may remain valid for at most 30 minutes so the signed intent can survive a
 normal cross-chain bridge interval. User min-out values, composition version,
@@ -228,6 +251,10 @@ always reloads a NAV snapshot no more than 15 seconds old.
 
 The PostgreSQL migration `0003_execution_vertical_slices.sql` adds the durable
 operation/checkpoint, quote, intent, bridge, CLOB order and settlement journals.
+Migration `0008_hybrid_jupiter_execution.sql` adds spot holdings, idle USDC,
+Jupiter gateway requests, one-time capital-source claims and per-asset
+shared-wallet reconciliation. Bridge and Jupiter transaction references cannot
+be reused to fund a different withdrawal split.
 Workers should treat the operation state machine as the workflow source of truth;
 provider balances are reconciliation inputs, not basket attribution.
 

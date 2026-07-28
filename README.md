@@ -3,11 +3,13 @@
 AlphaBasket is a real-position Polymarket basket protocol with share accounting
 on Solana.
 
-The current V2 architecture deliberately separates accounting from capital:
+The current architecture deliberately separates accounting from capital:
 
 - The AlphaBasket program runs on **Solana devnet** during internal testing.
 - User USDC deposits and withdrawal payouts use **Solana mainnet-beta**.
-- Trading and position custody use **Polymarket on Polygon mainnet**.
+- Prediction trading and custody use **Polymarket on Polygon mainnet**.
+- Spot trading and custody use **Jupiter and a backend-controlled Solana
+  mainnet settlement wallet**.
 - The Solana program records baskets, shares, fees, lifecycle state and
   immutable settlement receipts. It does **not** custody USDC or pUSD.
 
@@ -22,6 +24,7 @@ flowchart LR
     API["AlphaBasket API"]
     Bridge["Polymarket Bridge API"]
     CLOB["Polymarket CLOB"]
+    Jupiter["Jupiter Swap / Price APIs"]
     Polygon["Shared Polygon execution wallet"]
     Settlement["Solana mainnet settlement wallet"]
     Program["AlphaBasket program on devnet"]
@@ -35,7 +38,9 @@ flowchart LR
     API --> Gateway
     Gateway --> Signer
     Gateway -->|"EIP-712 + HMAC FAK orders"| CLOB
+    Gateway -->|"signed Swap V2 transaction"| Jupiter
     CLOB --> Polygon
+    Jupiter --> Settlement
     Polygon -->|"pUSD withdrawal"| Bridge
     Bridge -->|"mainnet USDC"| Settlement
     Gateway -->|"user / creator / protocol split"| User
@@ -49,13 +54,14 @@ flowchart LR
 1. The API creates a short-lived deposit quote and the user signs the exact
    intent.
 2. The user submits one Solana-mainnet transaction containing:
-   - the net USDC amount to the Polymarket bridge address; and
+   - prediction allocation to the Polymarket bridge address;
+   - spot allocation to the mainnet settlement wallet; and
    - the 0.5% deposit fee to the protocol destination.
 3. The backend verifies both finalized mainnet token-account deltas.
-4. The Bridge API converts the net deposit to pUSD in the assigned Polygon
-   execution wallet.
-5. The execution worker submits FAK buys. Partial fills are accepted and any
-   unspent pUSD remains attributed to the basket as idle pUSD.
+4. The Bridge API converts prediction allocation to pUSD in the assigned
+   Polygon execution wallet.
+5. The worker submits prediction FAK buys and Jupiter spot swaps. Partial fills
+   are accepted; unspent pUSD and USDC remain attributed to the basket.
 6. The backend reloads a fresh off-chain NAV and submits `complete_deposit` to
    the Solana-devnet program.
 7. The program verifies the user intent, backend authority, execution
@@ -65,10 +71,10 @@ flowchart LR
 
 1. The user signs a withdrawal intent for a specific share amount and minimum
    output.
-2. The backend liquidates the basket exposure pro rata using FAK sells and
-   includes the redeemed share of idle pUSD.
-3. Realized pUSD is transferred to a Bridge API withdrawal address targeting
-   the configured Solana-mainnet settlement wallet.
+2. The backend liquidates the basket pro rata using prediction FAK sells and
+   Jupiter spot-to-USDC swaps, including redeemed idle pUSD and USDC.
+3. Only realized pUSD is transferred through the Bridge API to the configured
+   Solana-mainnet settlement wallet.
 4. The backend verifies the finalized mainnet USDC receipt.
 5. The execution gateway atomically distributes mainnet USDC to the user,
    creator and protocol.
@@ -107,9 +113,10 @@ Performance fees follow redeemed-share high-water/cost-basis accounting so
 burned shares cannot be charged twice. Multiple deposits use weighted-average
 cost basis and holding time.
 
-Composition constraints remain:
+Composition constraints:
 
-- Maximum weight for one Polymarket event: 4,000 bps (40%).
+- Prediction-only or spot-only basket: 3,000 bps maximum per item.
+- Mixed Polymarket/Jupiter basket: 2,000 bps maximum per item.
 - Composition weights must total 10,000 bps.
 
 ## On-chain program
@@ -156,8 +163,9 @@ Location: `backend/`
 | `composer` | Deterministic filtering, weighting and signed basket composition |
 | `server` | Quote, intent, funding, operation-status and basket APIs |
 | `execution` | Durable operation state machine, allocation and attestations |
-| `deposits` / `withdrawals` | Live bridge, FAK execution and `complete_*` workflows |
-| `gateway` | CLOB signing/authentication, Polygon transfers and Solana-mainnet fee distribution |
+| `deposits` / `withdrawals` | Hybrid bridge, FAK/Jupiter execution and `complete_*` workflows |
+| `gateway` | CLOB/Jupiter signing, Polygon transfers and Solana-mainnet fee distribution |
+| `jupiter` | Verified token admission, Swap V2 execution and Price V3 marks |
 | `indexer` / `nav` | Finalized devnet projections and immutable off-chain NAV snapshots |
 | `lifecycle` | Management-fee keeper, reconstitution, resolution and final settlement |
 | `ledger` | Append-only double-entry virtual portfolio attribution |
@@ -167,7 +175,8 @@ Location: `backend/`
 
 PostgreSQL is authoritative for backend workflow state and virtual portfolio
 attribution. Finalized Solana accounts are authoritative for share accounting.
-Polymarket balances and fills are independently reconciled against both.
+Polymarket and Solana-mainnet spot balances and fills are independently
+reconciled against both.
 
 ### Financial API
 
@@ -206,6 +215,12 @@ POLYMARKET_CLOB_API_PASSPHRASE=<CLOB passphrase>
 POLYMARKET_EXECUTION_WALLET=<Polygon execution wallet>
 POLYMARKET_PUSD_TOKEN_ADDRESS=<Polygon pUSD token>
 SOLANA_SETTLEMENT_RECEIVER=<Solana mainnet settlement owner>
+
+JUPITER_SPOT_ENABLED=true
+JUPITER_API_KEY=<Jupiter API key>
+JUPITER_TOKENS_URL=https://api.jup.ag/tokens/v2
+JUPITER_SWAP_URL=https://api.jup.ag/swap/v2
+JUPITER_PRICE_URL=https://api.jup.ag/price/v3
 
 EXECUTION_GATEWAY_URL=<internal gateway URL>
 EXECUTION_GATEWAY_TOKEN=<random 32+ character secret>
@@ -307,10 +322,17 @@ solana program show \
 - No private key belongs in the API server, worker environment or database.
 - Role-separated Composer, accounting-completion, Polygon-order and
   Solana-settlement keys are accessed through a policy-enforced remote signer.
-- CLOB API credentials remain inside the authenticated execution gateway.
+- CLOB and Jupiter API credentials remain inside the authenticated execution
+  gateway.
 - Exact signed transaction/order payloads are journaled before broadcast.
+- Jupiter-reported fills are checked against finalized Solana-mainnet token
+  deltas before they enter the ledger.
+- Jupiter signing accepts exactly one settlement signer and an explicit
+  top-level program allowlist rooted at the configured aggregator.
 - Every external effect has a deterministic idempotency key and immutable
   accounting receipt.
+- Finalized bridge and Jupiter source receipts are atomically claimable by only
+  one payout split, preventing replay across operations.
 - Shared execution wallets permit only one capital-changing operation at a
   time; scaling uses sticky wallet shards.
 - Hybrid mode moves real mainnet capital and therefore uses the same allowlists,
@@ -327,12 +349,15 @@ Before a live hybrid test, operators must still:
 2. generate the loopback development keyring for internal testing, or provision
    the production KMS/HSM signer roles;
 3. configure CLOB credentials and required Polymarket token approvals;
-4. register/fund the execution and settlement wallets;
-5. apply migrations and start PostgreSQL/Temporal/workers;
-6. verify that the latest local contract build matches the devnet deployment;
-7. execute a low-value allowlisted deposit and withdrawal canary.
+4. configure a Jupiter API key, official mainnet USDC mint and vetted spot
+   mints;
+5. register/fund the execution and settlement wallets;
+6. apply migrations and start PostgreSQL/Temporal/workers;
+7. verify that the latest local contract build matches the devnet deployment;
+8. execute low-value prediction-only, spot-only and mixed deposit/withdrawal
+   canaries.
 
-The React frontend still needs to be wired to the V2 quote/intent/operation APIs
+The React frontend still needs to be wired to the current quote/intent/operation APIs
 and use a separate Solana-mainnet capital connection for deposit transactions.
 
 Production Composer TODO:
@@ -351,5 +376,5 @@ Detailed backend operations are documented in
 [`backend/docs/phase-5-6-runbook.md`](backend/docs/phase-5-6-runbook.md).
 
 Legacy quote-signer, settler and escrow-oriented directories may remain in the
-repository for reference, but they are not the active AlphaBasket V2 execution
+repository for reference, but they are not the active AlphaBasket execution
 path described above.
