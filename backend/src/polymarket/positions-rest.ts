@@ -38,6 +38,7 @@ export interface PolymarketPosition {
 }
 
 export interface PolymarketPositionsPort {
+  listPositions?(proxyWallet: string): Promise<readonly PolymarketPosition[]>;
   listRedeemable(proxyWallet: string): Promise<readonly PolymarketPosition[]>;
 }
 
@@ -52,12 +53,23 @@ export class PolymarketPositionsRest implements PolymarketPositionsPort {
   }
 
   public async listRedeemable(proxyWallet: string): Promise<readonly PolymarketPosition[]> {
+    return this.list(proxyWallet, true);
+  }
+
+  public async listPositions(proxyWallet: string): Promise<readonly PolymarketPosition[]> {
+    return this.list(proxyWallet, false);
+  }
+
+  private async list(
+    proxyWallet: string,
+    redeemableOnly: boolean,
+  ): Promise<readonly PolymarketPosition[]> {
     if (!/^0x[0-9a-fA-F]{40}$/u.test(proxyWallet)) throw new TypeError("invalid Polymarket proxy wallet address");
     const allRows: z.infer<typeof positionSchema>[] = [];
     for (let offset = 0; offset <= MAXIMUM_OFFSET; offset += PAGE_SIZE) {
       const query = new URLSearchParams({
         user: proxyWallet,
-        redeemable: "true",
+        ...(redeemableOnly ? { redeemable: "true" } : {}),
         sizeThreshold: "0",
         limit: PAGE_SIZE.toString(10),
         offset: offset.toString(10),
@@ -74,8 +86,16 @@ export class PolymarketPositionsRest implements PolymarketPositionsPort {
       seenTokens.add(row.asset);
       const sizeUnits = parseDecimalToFixed(row.size, SHARE_DECIMALS);
       const currentPriceUnits = parseDecimalToFixed(row.curPrice, SHARE_DECIMALS);
-      if (sizeUnits <= 0n || !row.redeemable) throw new Error("Polymarket redeemable-position response contains an invalid row");
-      if (currentPriceUnits !== 0n && currentPriceUnits !== 1_000_000n) throw new Error("redeemable position price must be exactly zero or one");
+      if (sizeUnits <= 0n || (redeemableOnly && !row.redeemable)) {
+        throw new Error("Polymarket position response contains an invalid row");
+      }
+      if (
+        redeemableOnly &&
+        currentPriceUnits !== 0n &&
+        currentPriceUnits !== 1_000_000n
+      ) {
+        throw new Error("redeemable position price must be exactly zero or one");
+      }
       return Object.freeze({
         proxyWallet: row.proxyWallet,
         tokenId: row.asset,

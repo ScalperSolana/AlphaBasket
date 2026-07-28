@@ -1,6 +1,7 @@
 import type { BasketAttributedHolding } from "../nav/types.js";
 import type { JsonValue } from "../persistence/outbox.js";
 import type { SqlClient } from "../persistence/sql-client.js";
+import { PublicKey } from "@solana/web3.js";
 
 export type LifecycleExternalExecutionKind = "reconstitution" | "resolution";
 
@@ -27,6 +28,7 @@ export interface LifecycleExternalExecutionStorePort {
     readonly nextCompositionVersion: bigint;
     readonly nextCompositionHash: string;
     readonly idlePusdUnits: bigint;
+    readonly idleUsdcUnits?: bigint;
     readonly holdings: readonly BasketAttributedHolding[];
     readonly result: JsonValue;
     readonly now: Date;
@@ -62,6 +64,29 @@ function validateHolding(holding: BasketAttributedHolding): void {
   }
   if ((holding.conditionId === undefined) !== (holding.negativeRisk === undefined)) {
     throw new TypeError("portfolio condition ID and negative-risk flag must be present together");
+  }
+  const kind = holding.assetKind ?? "prediction_market";
+  if (kind === "spot") {
+    if (
+      holding.conditionId !== undefined ||
+      holding.negativeRisk !== undefined ||
+      holding.tokenDecimals === undefined ||
+      !Number.isInteger(holding.tokenDecimals) ||
+      holding.tokenDecimals < 0 ||
+      holding.tokenDecimals > 18 ||
+      holding.priceScale !== 10n ** BigInt(holding.tokenDecimals)
+    ) {
+      throw new TypeError("spot portfolio holding metadata is invalid");
+    }
+    try {
+      if (new PublicKey(holding.tokenId).equals(PublicKey.default)) {
+        throw new Error("zero mint");
+      }
+    } catch {
+      throw new TypeError("spot portfolio token ID must be a Solana mint");
+    }
+  } else if (!/^(?:0|[1-9][0-9]*)$/u.test(holding.tokenId)) {
+    throw new TypeError("prediction portfolio token ID must be canonical decimal");
   }
 }
 
@@ -135,13 +160,19 @@ export class PostgresLifecycleExternalExecutionStore implements LifecycleExterna
     readonly nextCompositionVersion: bigint;
     readonly nextCompositionHash: string;
     readonly idlePusdUnits: bigint;
+    readonly idleUsdcUnits?: bigint;
     readonly holdings: readonly BasketAttributedHolding[];
     readonly result: JsonValue;
     readonly now: Date;
   }): Promise<JsonValue> {
     validateIdentity(request.operationId, request.requestHash, request.basketId);
     if (request.expectedLedgerVersion.length === 0 || request.expectedLedgerVersion.length > 256) throw new RangeError("invalid expected ledger version");
-    if (request.nextCompositionVersion < 0n || request.idlePusdUnits < 0n || !/^[0-9a-f]{64}$/u.test(request.nextCompositionHash)) {
+    if (
+      request.nextCompositionVersion < 0n ||
+      request.idlePusdUnits < 0n ||
+      (request.idleUsdcUnits ?? 0n) < 0n ||
+      !/^[0-9a-f]{64}$/u.test(request.nextCompositionHash)
+    ) {
       throw new RangeError("invalid next portfolio state");
     }
     request.holdings.forEach(validateHolding);
@@ -183,7 +214,9 @@ export class PostgresLifecycleExternalExecutionStore implements LifecycleExterna
       await transaction.query(
         `UPDATE basket_portfolio_states
          SET ledger_version = $2, composition_version = $3::numeric,
-             composition_hash = $4, idle_pusd_units = $5::numeric, updated_at = $6
+             composition_hash = $4, idle_pusd_units = $5::numeric,
+             idle_usdc_units = COALESCE($6::numeric, idle_usdc_units),
+             updated_at = $7
          WHERE basket_id = $1`,
         [
           request.basketId,
@@ -191,6 +224,7 @@ export class PostgresLifecycleExternalExecutionStore implements LifecycleExterna
           request.nextCompositionVersion.toString(10),
           request.nextCompositionHash,
           request.idlePusdUnits.toString(10),
+          request.idleUsdcUnits?.toString(10) ?? null,
           request.now,
         ],
       );
@@ -201,10 +235,11 @@ export class PostgresLifecycleExternalExecutionStore implements LifecycleExterna
           `INSERT INTO basket_holding_projections (
              basket_id, market_id, token_id, condition_id, negative_risk, outcome,
              quantity_units, mark_price_units, price_scale, mark_observed_at_ms,
-             mark_source_hash, mark_condition, updated_at
+             mark_source_hash, mark_condition, updated_at,
+             asset_kind, token_decimals
            ) VALUES (
              $1, $2, $3, $4, $5, $6, $7::numeric, $8::numeric,
-             $9::numeric, $10::numeric, $11, $12, $13
+             $9::numeric, $10::numeric, $11, $12, $13, $14, $15
            )`,
           [
             request.basketId,
@@ -220,6 +255,8 @@ export class PostgresLifecycleExternalExecutionStore implements LifecycleExterna
             holding.markSourceHash,
             holding.markCondition,
             request.now,
+            holding.assetKind ?? "prediction_market",
+            holding.tokenDecimals ?? null,
           ],
         );
       }

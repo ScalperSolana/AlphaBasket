@@ -29,14 +29,22 @@ import {
   PgSqlClient,
   PostgresOutboxRepository,
 } from "../persistence/index.js";
-import { JsonHttpClient } from "../polymarket/index.js";
-import { assertSolanaRpcCluster } from "../runtime/index.js";
+import {
+  JsonHttpClient,
+  PolymarketPositionsRest,
+} from "../polymarket/index.js";
+import {
+  PolygonPusdBalance,
+  assertSolanaRpcCluster,
+} from "../runtime/index.js";
 import {
   OutboxReconciliationAlertSink,
   PostgresReconciliationSource,
   PostgresReconciliationStore,
   ReconciliationService,
   ReconciliationWebhookAlertDelivery,
+  HybridAssetReconciliationRefresher,
+  Web3SolanaTokenBalance,
 } from "../reconciliation/index.js";
 import {
   HttpKeySigner,
@@ -76,11 +84,24 @@ const connection = new Connection(config.solana.accounting.rpcUrl, {
     ? {}
     : { wsEndpoint: config.solana.accounting.wsUrl }),
 });
-await assertSolanaRpcCluster(
-  connection,
-  config.deployment.accountingSolanaCluster,
-  "accounting",
-);
+const capitalConnection = new Connection(config.solana.capital.rpcUrl, {
+  commitment: "confirmed",
+  ...(config.solana.capital.wsUrl === undefined
+    ? {}
+    : { wsEndpoint: config.solana.capital.wsUrl }),
+});
+await Promise.all([
+  assertSolanaRpcCluster(
+    connection,
+    config.deployment.accountingSolanaCluster,
+    "accounting",
+  ),
+  assertSolanaRpcCluster(
+    capitalConnection,
+    config.deployment.capitalSolanaCluster,
+    "capital",
+  ),
+]);
 type ProviderWallet = ConstructorParameters<typeof AnchorProvider>[1];
 const readOnlyWallet: ProviderWallet = {
   publicKey: backendPublicKey,
@@ -154,8 +175,9 @@ const keeper = new ManagementFeeKeeper(
   },
 );
 const outbox = new PostgresOutboxRepository(sql);
+const reconciliationSource = new PostgresReconciliationSource(sql);
 const reconciliation = new ReconciliationService(
-  new PostgresReconciliationSource(sql),
+  reconciliationSource,
   new PostgresReconciliationStore(sql),
   new OutboxReconciliationAlertSink(outbox),
   { now: () => new Date() },
@@ -167,6 +189,26 @@ const reconciliation = new ReconciliationService(
     maxPendingOperationAgeMs: config.deployment.reconciliationMaxPendingAgeMs,
   },
 );
+const assetRefresher = config.deployment.capitalMode === "live_bridge"
+  ? new HybridAssetReconciliationRefresher(
+      sql,
+      reconciliationSource,
+      new PolygonPusdBalance(
+        http,
+        required(config.polymarket.polygonRpcUrl, "POLYGON_RPC_URL"),
+        required(config.polymarket.pusdTokenAddress, "POLYMARKET_PUSD_TOKEN_ADDRESS"),
+      ),
+      new PolymarketPositionsRest(http, { baseUrl: config.polymarket.dataUrl }),
+      new Web3SolanaTokenBalance(capitalConnection),
+      {
+        usdcMint: new PublicKey(config.solana.capital.usdcMint),
+        fallbackSolanaOwner: new PublicKey(required(
+          config.polymarket.solanaSettlementReceiver,
+          "SOLANA_SETTLEMENT_RECEIVER",
+        )),
+      },
+    )
+  : undefined;
 const pagingUrl = config.operations.alertPagingWebhookUrl;
 const ticketUrl = config.operations.alertTicketWebhookUrl;
 const webhookSecret = config.operations.alertWebhookHmacSecret;
@@ -190,6 +232,9 @@ const dispatcher = pagingUrl === undefined || ticketUrl === undefined || webhook
 const tasks = lifecycleAutomationTasks(keeper, reconciliation, {
   managementFeeIntervalMs: config.deployment.managementFeeKeeperIntervalMs,
   reconciliationIntervalMs: config.deployment.reconciliationIntervalMs,
+  ...(assetRefresher === undefined
+    ? {}
+    : { beforeReconciliation: () => assetRefresher.runOnce() }),
   ...(dispatcher === undefined ? {} : {
     outbox: dispatcher,
     outboxIntervalMs: config.deployment.outboxIntervalMs,

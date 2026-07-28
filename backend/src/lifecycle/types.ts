@@ -113,7 +113,9 @@ export interface LifecycleRunStorePort {
 export interface ReconstitutionExecutionResult {
   readonly executionHash: string;
   readonly orderIds: readonly string[];
+  readonly jupiterTransactions?: readonly string[];
   readonly realizedPusdDeltaUnits: bigint;
+  readonly realizedUsdcDeltaUnits?: bigint;
   readonly executedAtMs: bigint;
 }
 

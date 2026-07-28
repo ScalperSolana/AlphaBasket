@@ -7,6 +7,7 @@ import type {
   ComposerPolicy,
   ComposerSignerPort,
   CreatorMarketWeight,
+  SpotCompositionSelection,
 } from "../composer/types.js";
 import type { LifecycleBasket, SignedReconstitution } from "./types.js";
 
@@ -15,6 +16,7 @@ export interface ReconstitutionPlanRequest {
   readonly candidates: readonly ComposerCandidate[];
   readonly policy: ComposerPolicy;
   readonly creatorWeights: readonly CreatorMarketWeight[];
+  readonly spotSelections?: readonly SpotCompositionSelection[];
   readonly eligibilityNonce: bigint;
   readonly compositionNonce: bigint;
   readonly compositionExpirySeconds: bigint;
@@ -37,6 +39,7 @@ export class ReconstitutionPlanner {
       request.creatorWeights,
       request.policy,
       request.nowMs,
+      request.spotSelections ?? [],
     );
     const nextCompositionVersion = request.basket.compositionVersion + 1;
     const encodedMessage = reconstitutionAuthorizationMessage({
