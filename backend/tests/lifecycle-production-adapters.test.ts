@@ -42,6 +42,7 @@ class MemoryExecutionStore implements LifecycleExternalExecutionStorePort {
   public plan: JsonValue | null = null;
   public holdings: readonly BasketAttributedHolding[] = [];
   public idle = 0n;
+  public idleUsdc = 0n;
   public identity: { operationId: string; requestHash: string } | undefined;
 
   public async prepare(request: { operationId: string; requestHash: string }): Promise<JsonValue | null> {
@@ -67,11 +68,13 @@ class MemoryExecutionStore implements LifecycleExternalExecutionStorePort {
     result: JsonValue;
     holdings: readonly BasketAttributedHolding[];
     idlePusdUnits: bigint;
+    idleUsdcUnits?: bigint;
   }): Promise<JsonValue> {
     if (this.result === null) {
       this.result = request.result;
       this.holdings = request.holdings;
       this.idle = request.idlePusdUnits;
+      this.idleUsdc = request.idleUsdcUnits ?? 0n;
     }
     return this.result;
   }
@@ -326,6 +329,278 @@ describe("Polymarket lifecycle production adapters", () => {
     // Worst-price bounded buys intentionally leave the unspent pUSD attributed
     // to the basket instead of forcing a final trade beyond the target.
     assert.equal(store.idle, 8_804_665n);
+  });
+
+  it("reconstitutes mixed baskets with replay-safe Jupiter spot legs", async () => {
+    const bytes32 = (value: number): Uint8Array => {
+      const result = new Uint8Array(32);
+      result[31] = value;
+      return result;
+    };
+    const spotA = new PublicKey(new Uint8Array(32).fill(61));
+    const spotB = new PublicKey(new Uint8Array(32).fill(62));
+    const spotC = new PublicKey(new Uint8Array(32).fill(63));
+    const spotRemoved = new PublicKey(new Uint8Array(32).fill(64));
+    const state: BasketAttributedState = {
+      basketId: basket.toBase58(),
+      ledgerVersion: "ledger-hybrid-1",
+      compositionVersion: 1n,
+      compositionHash: oldHash,
+      idlePusdUnits: 40_000_000n,
+      idleUsdcUnits: 30_000_000n,
+      holdings: [
+        {
+          assetKind: "prediction_market",
+          marketId: "m1",
+          tokenId: "1",
+          conditionId: condition,
+          negativeRisk: false,
+          outcome: "1",
+          quantityUnits: 20_000_000n,
+          markPriceUnits: 500_000n,
+          priceScale: 1_000_000n,
+          markObservedAtMs: BigInt(now.getTime()),
+          markSourceHash: "old-prediction",
+          markCondition: "fresh",
+        },
+        ...[
+          [spotA, "spot-a"],
+          [spotRemoved, "spot-removed"],
+        ].map(([mint, marketId]) => ({
+          assetKind: "spot" as const,
+          marketId: marketId as string,
+          tokenId: (mint as PublicKey).toBase58(),
+          outcome: "spot",
+          quantityUnits: 10_000_000n,
+          markPriceUnits: 1_000_000n,
+          priceScale: 1_000_000n,
+          tokenDecimals: 6,
+          markObservedAtMs: BigInt(now.getTime()),
+          markSourceHash: "old-jupiter",
+          markCondition: "fresh" as const,
+        })),
+      ],
+    };
+    const items = [
+      {
+        marketId: "m1",
+        kind: {
+          predictionMarket: {
+            outcome: 1,
+            ctfTokenId: bytes32(1),
+          },
+        },
+        weightBps: 2_000,
+      },
+      {
+        marketId: "m2",
+        kind: {
+          predictionMarket: {
+            outcome: 0,
+            ctfTokenId: bytes32(2),
+          },
+        },
+        weightBps: 2_000,
+      },
+      {
+        marketId: "spot-a",
+        kind: { spot: { tokenMint: spotA } },
+        weightBps: 2_000,
+      },
+      {
+        marketId: "spot-b",
+        kind: { spot: { tokenMint: spotB } },
+        weightBps: 2_000,
+      },
+      {
+        marketId: "spot-c",
+        kind: { spot: { tokenMint: spotC } },
+        weightBps: 2_000,
+      },
+    ] as const;
+    const contract = await import("../src/contract/composition.js");
+    const signedCompositionHash = contract.compositionHash(items);
+    const eligibleMarkets = items.flatMap((item) =>
+      "predictionMarket" in item.kind
+        ? [{
+            marketId: item.marketId,
+            outcome: item.kind.predictionMarket.outcome,
+            ctfTokenId: item.kind.predictionMarket.ctfTokenId,
+          }]
+        : [],
+    );
+    const store = new MemoryExecutionStore();
+    const orders = new Map<string, string>();
+    const swaps = new Map<string, {
+      readonly idempotencyKey: string;
+      readonly inputMint: PublicKey;
+      readonly outputMint: PublicKey;
+      readonly requestedInputUnits: bigint;
+      readonly filledInputUnits: bigint;
+      readonly filledOutputUnits: bigint;
+      readonly minimumOutputUnits: bigint;
+      readonly transactionSignature: string;
+      readonly finalizedSlot: bigint;
+      readonly executedAtMs: bigint;
+      readonly status: "filled";
+    }>();
+    let marketCalls = 0;
+    let priceCalls = 0;
+    const usdcMint = new PublicKey(new Uint8Array(32).fill(65));
+    const taker = new PublicKey(new Uint8Array(32).fill(66));
+    const executor = new PolymarketReconstitutionExecutor(
+      { loadBasketState: async () => state },
+      store,
+      {
+        getMidpoint: async () => 500_000n,
+        getOrderBook: async (tokenId) => {
+          marketCalls += 1;
+          return {
+            marketId: tokenId === "1"
+              ? condition
+              : `0x${tokenId.repeat(64)}`,
+            tokenId,
+            timestampMs: BigInt(now.getTime()),
+            bids: [{
+              priceUnits: 490_000n,
+              sizeUnits: 1_000_000_000n,
+            }],
+            asks: [{
+              priceUnits: 510_000n,
+              sizeUnits: 1_000_000_000n,
+            }],
+            minOrderSizeUnits: 1n,
+            tickSizeUnits: 10_000n,
+            negativeRisk: false,
+            sourceHash: `book-${tokenId}`,
+          };
+        },
+      },
+      {
+        executeFak: async (request) => {
+          const orderId =
+            orders.get(request.clientOrderId) ??
+            `hybrid-order-${orders.size}`;
+          orders.set(request.clientOrderId, orderId);
+          return {
+            clientOrderId: request.clientOrderId,
+            orderId,
+            tokenId: request.tokenId,
+            side: request.side,
+            requestedAmountUnits: request.amountUnits,
+            filledInputUnits: request.amountUnits,
+            filledOutputUnits: request.amountUnits * 2n,
+            averagePriceUnits: request.worstPriceUnits,
+            status: "matched",
+            transactionHashes: [],
+            tradeIds: [],
+            executedAtMs: BigInt(now.getTime()),
+          };
+        },
+      },
+      { now: () => now },
+      coordinator,
+      "wallet-hybrid-reconstitution",
+      executionGuard,
+      100,
+      undefined,
+      {
+        usdcMint,
+        taker,
+        tokens: {
+          lookup: async () => {
+            throw new Error("unexpected token batch lookup");
+          },
+          requireVerified: async (mint) => ({
+            mint,
+            name: "Test Spot",
+            symbol: "TST",
+            decimals: 6,
+            tokenProgram: SystemProgram.programId,
+            isVerified: true,
+            tags: [],
+            updatedAt: null,
+          }),
+        },
+        prices: {
+          getUsdcPrices: async (mints) => {
+            priceCalls += 1;
+            return mints.map((mint) => ({
+              mint,
+              priceUsdcUnits: 1_000_000n,
+              observedAtMs: BigInt(now.getTime()),
+              sourceHash: `jupiter-price-${mint.toBase58()}`,
+            }));
+          },
+        },
+        jupiter: {
+          executeExactIn: async (request) => {
+            const prior = swaps.get(request.idempotencyKey);
+            if (prior !== undefined) return prior;
+            const result = Object.freeze({
+              idempotencyKey: request.idempotencyKey,
+              inputMint: request.inputMint,
+              outputMint: request.outputMint,
+              requestedInputUnits: request.inputAmountUnits,
+              filledInputUnits: request.inputAmountUnits,
+              filledOutputUnits: request.inputAmountUnits,
+              minimumOutputUnits:
+                request.inputAmountUnits * 99n / 100n,
+              transactionSignature:
+                `hybrid-reconstitution-swap-${swaps.size}`,
+              finalizedSlot: 70n,
+              executedAtMs: BigInt(now.getTime()),
+              status: "filled" as const,
+            });
+            swaps.set(request.idempotencyKey, result);
+            return result;
+          },
+        },
+      },
+    );
+    const authorization = {
+      basket,
+      basketId: new Uint8Array(32).fill(1),
+      nextCompositionVersion: 2,
+      compositionHash: signedCompositionHash,
+      eligibilityHash: contract.eligibilityHash(eligibleMarkets),
+      eligibilityNonce: 2n,
+      eligibleMarkets,
+      items,
+      compositionNonce: 3n,
+      compositionExpirySeconds: 2_000_000_100n,
+      encodedMessage: new Uint8Array([1]),
+      composerPublicKey: new Uint8Array(32).fill(2),
+      composerSignature: new Uint8Array(64).fill(3),
+    } as const;
+    const first = await executor.rebalance({
+      operationId: "hybrid-reconstitution-1",
+      basket,
+      previousCompositionVersion: 1,
+      nextComposition: authorization,
+    });
+    const replay = await executor.rebalance({
+      operationId: "hybrid-reconstitution-1",
+      basket,
+      previousCompositionVersion: 1,
+      nextComposition: authorization,
+    });
+    assert.equal(first.executionHash, replay.executionHash);
+    assert.equal(first.orderIds.length, 2);
+    assert.equal(first.jupiterTransactions?.length, 4);
+    assert.equal(orders.size, 2);
+    assert.equal(swaps.size, 4);
+    assert.equal(marketCalls, 2);
+    assert.equal(priceCalls, 1);
+    assert.equal(store.idle, 10_000_000n);
+    assert.equal(store.idleUsdc, 0n);
+    assert.equal(store.holdings.length, 5);
+    assert.equal(
+      store.holdings.some(
+        (holding) => holding.tokenId === spotRemoved.toBase58(),
+      ),
+      false,
+    );
   });
 
   it("redeems a shared-wallet condition once and attributes only basket-owned winning tokens", async () => {

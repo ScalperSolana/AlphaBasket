@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { Keypair } from "@solana/web3.js";
 
 import {
   MANAGEMENT_FEE_PERIOD_SECS,
@@ -143,6 +144,60 @@ describe("NAV snapshots", () => {
     assert.equal(snapshot.holdings[0]?.markPriceUnits, 450_000n);
     assert.equal(snapshot.holdings[0]?.markSourceHash, "fallback:oracle:42");
     assert.equal(snapshot.holdings[0]?.markObservedAtMs, nowMs - 1_000n);
+  });
+
+  it("values Jupiter spot base units and idle mainnet USDC in the same NAV", async () => {
+    const nowMs = 2_000_000_000_000n;
+    const mint = Keypair.generate().publicKey;
+    const service = new NavSnapshotService(
+      {
+        loadBasketState: async () => ({
+          basketId: "basket-spot",
+          ledgerVersion: "ledger:spot:1",
+          compositionVersion: 1n,
+          compositionHash: "ef".repeat(32),
+          idlePusdUnits: 5_000_000n,
+          idleUsdcUnits: 7_000_000n,
+          holdings: [{
+            assetKind: "spot" as const,
+            marketId: `jupiter:${mint.toBase58()}`,
+            tokenId: mint.toBase58(),
+            outcome: "spot",
+            quantityUnits: 2_000_000_000n,
+            tokenDecimals: 9,
+            priceScale: 1_000_000_000n,
+            markPriceUnits: 3_000_000n,
+            markObservedAtMs: nowMs,
+            markSourceHash: "jupiter-price-v3:test",
+            markCondition: "fresh" as const,
+          }],
+        }),
+      },
+      {
+        loadShareSupply: async () => ({
+          totalSharesUnits: 18_000_000n,
+          protocolFeeSharesUnits: 0n,
+          lastManagementFeeAtSeconds: nowMs / 1_000n,
+          managementFeeAccrualRemainder: 0n,
+          sourceSlot: 5n,
+          sourceVersion: "solana:5:basket-spot",
+        }),
+      },
+      { nextSequence: async () => 1n, append: async () => undefined },
+      {
+        resolve: async () => {
+          throw new Error("fresh Jupiter mark must not use fallback");
+        },
+      },
+      { nowMs: () => nowMs },
+      { maxMarkAgeMs: 60_000n },
+    );
+    const snapshot = await service.createSnapshot("basket-spot");
+    assert.equal(snapshot.positionValuePusdUnits, 6_000_000n);
+    assert.equal(snapshot.idleUsdcUnits, 7_000_000n);
+    assert.equal(snapshot.grossNavPusdUnits, 18_000_000n);
+    assert.equal(snapshot.sharePriceUnits, 1_000_000n);
+    assert.equal(snapshot.holdings[0]?.assetKind, "spot");
   });
 });
 

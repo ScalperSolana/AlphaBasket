@@ -49,15 +49,16 @@ const executionGuard = Object.freeze({ authorize: async () => undefined });
 describe("execution allocation and attestations", () => {
   it("leaves allocation dust idle and liquidation dust invested", () => {
     const targets = [
-      { tokenId: "a", weightBps: 4_000, currentUnits: 11n },
-      { tokenId: "b", weightBps: 3_000, currentUnits: 13n },
-      { tokenId: "c", weightBps: 3_000, currentUnits: 17n },
+      { tokenId: "a", weightBps: 2_500, currentUnits: 11n },
+      { tokenId: "b", weightBps: 2_500, currentUnits: 13n },
+      { tokenId: "c", weightBps: 2_500, currentUnits: 17n },
+      { tokenId: "d", weightBps: 2_500, currentUnits: 19n },
     ] as const;
     const deposit = allocateDepositPusd(101n, targets);
-    assert.deepEqual(deposit.targets.map((item) => item.amountUnits), [40n, 30n, 30n]);
+    assert.deepEqual(deposit.targets.map((item) => item.amountUnits), [25n, 25n, 25n, 25n]);
     assert.equal(deposit.idlePusdUnits, 1n);
     const liquidation = allocateProportionalLiquidation(1n, 3n, targets);
-    assert.deepEqual(liquidation.map((item) => item.amountUnits), [3n, 4n, 5n]);
+    assert.deepEqual(liquidation.map((item) => item.amountUnits), [3n, 4n, 5n, 6n]);
   });
 
   it("hashes every fill field without delimiter ambiguity", () => {
@@ -235,9 +236,10 @@ describe("deposit crash/replay safety", () => {
       fundingTransactionSignature: "solana-funding",
       maxSlippageBps: 100,
       targets: [
-        { tokenId: "a", weightBps: 4_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
-        { tokenId: "b", weightBps: 3_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
-        { tokenId: "c", weightBps: 3_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "a", weightBps: 2_500, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "b", weightBps: 2_500, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "c", weightBps: 2_500, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "d", weightBps: 2_500, worstBuyPriceUnits: 600_000n, negativeRisk: false },
       ],
       settlementNonce: 1n,
       now,
@@ -247,10 +249,221 @@ describe("deposit crash/replay safety", () => {
     const replay = await workflow.execute(request);
     assert.equal(first.operation.state, "completed");
     assert.equal(replay.executionBatchHash, first.executionBatchHash);
-    assert.equal(uniqueOrders.size, 3);
+    assert.equal(uniqueOrders.size, 4);
     assert.equal(settlementBatches.size, 1);
     assert.equal(settlementAttempts, 3);
-    assert.equal(first.idlePusdUnits, 3n);
+    assert.equal(first.idlePusdUnits, 4n);
+  });
+
+  it("executes a mixed Polymarket and Jupiter deposit and retains both idle assets", async () => {
+    const user = userSigner();
+    const usdcMint = new PublicKey(new Uint8Array(32).fill(31));
+    const settlementWallet = new PublicKey(new Uint8Array(32).fill(32));
+    const spotMints = [
+      new PublicKey(new Uint8Array(32).fill(33)),
+      new PublicKey(new Uint8Array(32).fill(34)),
+      new PublicKey(new Uint8Array(32).fill(35)),
+    ];
+    const quote = new QuoteService().createDepositQuote({
+      basket,
+      user: user.publicKey,
+      compositionVersion: 1,
+      navReportHash: navHash,
+      basketNavValue: 0n,
+      sharePrice: 1_000_000n,
+      grossAmount: 1_000_000n,
+      maxSlippageBps: 100,
+      nowSeconds,
+      expiresAtSeconds: nowSeconds + 60n,
+    });
+    const intent = new IntentSubmissionService().submitDeposit({
+      quote,
+      nonce: 9n,
+      signature: user.sign(depositIntentMessage({
+        basket,
+        user: user.publicKey,
+        intentNonce: 9n,
+        intentExpiry: quote.expiresAtSeconds,
+        expectedCompositionVersion: 1,
+        grossAmount: quote.grossAmount,
+        minSharesOut: quote.minSharesOut,
+        quoteHash: quote.quoteHash,
+      })),
+      nowSeconds,
+    });
+    const verifiedTransfers = new Map<string, bigint>();
+    const fakOrders = new Map<string, FakOrderResult>();
+    const swaps = new Map<string, Awaited<ReturnType<
+      NonNullable<ConstructorParameters<typeof DepositWorkflow>[10]>["executeExactIn"]
+    >>>();
+    let bridgeAddressCalls = 0;
+    const workflow = new DepositWorkflow(
+      new InMemoryExecutionOperationStore(),
+      {
+        createDepositAddress: async () => {
+          bridgeAddressCalls += 1;
+          return {
+            svm: new PublicKey(new Uint8Array(32).fill(36)).toBase58(),
+            evm: `0x${"77".repeat(20)}`,
+          };
+        },
+        createWithdrawalAddress: async () => {
+          throw new Error("unexpected withdrawal bridge");
+        },
+        getStatus: async (address) => [{
+          status: "COMPLETED",
+          bridgeAddress: address,
+          sourceTxHash: null,
+          destinationTxHash: "polygon-mixed-credit",
+          inputAmountUnits: 398_000n,
+          outputAmountUnits: 398_000n,
+          observedAtMs: nowSeconds * 1_000n,
+        }],
+      },
+      {
+        verifyPusdCredit: async () => ({
+          amountUnits: 398_000n,
+          finalizedBlock: 1n,
+        }),
+      },
+      {
+        verifyFinalizedTransfer: async (request) => {
+          verifiedTransfers.set(
+            request.expectedBridgeAddress,
+            request.expectedAmountUnits,
+          );
+          return {
+            signature: request.signature,
+            user: request.expectedUser,
+            bridgeAddress: request.expectedBridgeAddress,
+            mint: request.expectedMint,
+            amountUnits: request.expectedAmountUnits,
+            finalizedSlot: 2n,
+          };
+        },
+      },
+      {
+        executeFak: async (request) => {
+          const prior = fakOrders.get(request.clientOrderId);
+          if (prior !== undefined) return prior;
+          const result: FakOrderResult = {
+            clientOrderId: request.clientOrderId,
+            orderId: `mixed-${request.clientOrderId}`,
+            tokenId: request.tokenId,
+            side: "buy",
+            requestedAmountUnits: request.amountUnits,
+            filledInputUnits: request.amountUnits - 1n,
+            filledOutputUnits: request.amountUnits * 2n,
+            averagePriceUnits: 500_000n,
+            status: "partially_filled",
+            transactionHashes: [],
+            tradeIds: [],
+            executedAtMs: nowSeconds * 1_000n,
+          };
+          fakOrders.set(request.clientOrderId, result);
+          return result;
+        },
+      },
+      {
+        loadLatestPricing: async () => ({
+          navReportHash: navHash,
+          basketNavValue: 0n,
+          sharePrice: 1_000_000n,
+          observedAtSeconds: nowSeconds,
+        }),
+      },
+      {
+        completeDeposit: async () => ({
+          transactionSignature: "mixed-deposit-settlement",
+          receiptAddress: "mixed-receipt",
+          finalizedSlot: 3n,
+        }),
+        completeWithdrawal: async () => {
+          throw new Error("unexpected withdrawal");
+        },
+        completeProtocolFeeWithdrawal: async () => {
+          throw new Error("unexpected protocol redemption");
+        },
+      },
+      executionGuard,
+      walletCoordinator,
+      undefined,
+      {
+        executeExactIn: async (request) => {
+          const prior = swaps.get(request.idempotencyKey);
+          if (prior !== undefined) return prior;
+          const result = Object.freeze({
+            idempotencyKey: request.idempotencyKey,
+            inputMint: request.inputMint,
+            outputMint: request.outputMint,
+            requestedInputUnits: request.inputAmountUnits,
+            filledInputUnits: request.inputAmountUnits - 1_000n,
+            filledOutputUnits: 50_000n,
+            minimumOutputUnits: 49_000n,
+            transactionSignature: `jupiter-mixed-${swaps.size}`,
+            finalizedSlot: 4n,
+            executedAtMs: nowSeconds * 1_000n,
+            status: "partially_filled" as const,
+          });
+          swaps.set(request.idempotencyKey, result);
+          return result;
+        },
+      },
+    );
+    const prepared = await workflow.prepare({
+      operationId: "11000000-0000-4000-8000-000000000011",
+      requestKey: "mixed-deposit",
+      workflowId: "mixed-deposit",
+      intent,
+      polymarketWallet: `0x${"88".repeat(20)}`,
+      now,
+    });
+    const protocolDestination =
+      new PublicKey(new Uint8Array(32).fill(37)).toBase58();
+    const request = {
+      operationId: "11000000-0000-4000-8000-000000000011",
+      requestKey: "mixed-deposit",
+      workflowId: "mixed-deposit",
+      intent,
+      polymarketWallet: `0x${"88".repeat(20)}`,
+      walletId: "wallet-mixed-deposit",
+      preparedBridgeAddress: prepared.bridgeAddress,
+      solanaUsdcMint: usdcMint.toBase58(),
+      protocolFeeDestination: protocolDestination,
+      spotFundingDestination: settlementWallet.toBase58(),
+      fundingTransactionSignature: "mainnet-mixed-funding",
+      maxSlippageBps: 100,
+      targets: [
+        { tokenId: "1", weightBps: 2_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        { tokenId: "2", weightBps: 2_000, worstBuyPriceUnits: 600_000n, negativeRisk: false },
+        ...spotMints.map((mint, index) => ({
+          kind: "spot" as const,
+          tokenId: `spot-${index}`,
+          tokenMint: mint.toBase58(),
+          weightBps: 2_000,
+        })),
+      ],
+      settlementNonce: 11n,
+      now,
+    } as const;
+    const first = await workflow.execute(request);
+    const replay = await workflow.execute(request);
+    assert.equal(first.operation.state, "completed");
+    assert.equal(first.netDepositValue, quote.quotedNetValue);
+    assert.equal(first.idlePusdUnits, 2n);
+    assert.equal(first.idleUsdcUnits, 3_000n);
+    assert.equal(first.orders.length, 2);
+    assert.equal(first.jupiterSwaps.length, 3);
+    assert.equal(replay.executionBatchHash, first.executionBatchHash);
+    assert.equal(fakOrders.size, 2);
+    assert.equal(swaps.size, 3);
+    assert.equal(bridgeAddressCalls, 1);
+    assert.equal(verifiedTransfers.get(prepared.bridgeAddress), 398_000n);
+    assert.equal(
+      verifiedTransfers.get(settlementWallet.toBase58()),
+      597_000n,
+    );
+    assert.equal(verifiedTransfers.get(protocolDestination), 5_000n);
   });
 });
 
@@ -359,9 +572,10 @@ describe("withdrawal vertical slice", () => {
       weightedDepositTimestamp: nowSeconds - 2_592_000n,
       idlePusdUnits: 10_000_000n,
       targets: [
-        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
-        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
-        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "a", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "b", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "c", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
+        { tokenId: "d", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 800_000n, negativeRisk: false },
       ],
       performanceFeeBps: 1_000,
       maxSlippageBps: 0,
@@ -381,10 +595,191 @@ describe("withdrawal vertical slice", () => {
     assert.equal(first.protocolFee, 200_000n);
     assert.equal(first.userValueOut, 9_300_000n);
     assert.equal(replay.executionBatchHash, first.executionBatchHash);
-    assert.equal(orders.size, 3);
+    assert.equal(orders.size, 4);
     assert.equal(transfers.size, 1);
     assert.equal(splits.size, 1);
     assert.equal(settlements.size, 1);
+  });
+
+  it("liquidates a spot basket through Jupiter without invoking the Polymarket bridge", async () => {
+    const user = userSigner();
+    const destination = new PublicKey(new Uint8Array(32).fill(41));
+    const settlementWallet = new PublicKey(new Uint8Array(32).fill(42));
+    const usdcMint = new PublicKey(new Uint8Array(32).fill(43));
+    const spotMints = [44, 45, 46, 47].map(
+      (byte) => new PublicKey(new Uint8Array(32).fill(byte)),
+    );
+    const quote = new QuoteService().createWithdrawalQuote({
+      basket,
+      user: user.publicKey,
+      compositionVersion: 1,
+      navReportHash: navHash,
+      basketNavValue: 100_000_000n,
+      sharePrice: 1_000_000n,
+      shareAmount: 10_000_000n,
+      sharesOwned: 100_000_000n,
+      costBasisValue: 50_000_000n,
+      weightedDepositTimestamp: nowSeconds - 2_592_000n,
+      performanceFeeBps: 1_000,
+      maxSlippageBps: 100,
+      nowSeconds,
+      expiresAtSeconds: nowSeconds + 60n,
+    });
+    const intent = new IntentSubmissionService().submitWithdrawal({
+      quote,
+      nonce: 12n,
+      destination,
+      signature: user.sign(withdrawalIntentMessage({
+        basket,
+        user: user.publicKey,
+        intentNonce: 12n,
+        intentExpiry: quote.expiresAtSeconds,
+        expectedCompositionVersion: 1,
+        shareAmount: quote.shareAmount,
+        minValueOut: quote.minValueOut,
+        destination,
+        quoteHash: quote.quoteHash,
+      })),
+      nowSeconds,
+    });
+    const swaps = new Map<string, {
+      readonly idempotencyKey: string;
+      readonly inputMint: PublicKey;
+      readonly outputMint: PublicKey;
+      readonly requestedInputUnits: bigint;
+      readonly filledInputUnits: bigint;
+      readonly filledOutputUnits: bigint;
+      readonly minimumOutputUnits: bigint;
+      readonly transactionSignature: string;
+      readonly finalizedSlot: bigint;
+      readonly executedAtMs: bigint;
+      readonly status: "filled";
+    }>();
+    let splitSources: readonly string[] = [];
+    const workflow = new WithdrawalWorkflow(
+      new InMemoryExecutionOperationStore(),
+      { executeFak: async () => {
+        throw new Error("spot withdrawal must not submit a FAK order");
+      } },
+      {
+        createDepositAddress: async () => {
+          throw new Error("spot withdrawal must not create a bridge address");
+        },
+        createWithdrawalAddress: async () => {
+          throw new Error("spot withdrawal must not create a bridge address");
+        },
+        getStatus: async () => {
+          throw new Error("spot withdrawal must not poll the bridge");
+        },
+      },
+      { transferPusd: async () => {
+        throw new Error("spot withdrawal must not transfer pUSD");
+      } },
+      { verifyReceived: async () => {
+        throw new Error("spot withdrawal must not verify a bridge receipt");
+      } },
+      {
+        distribute: async (request) => {
+          assert.equal(request.sourceBridgeTransaction, null);
+          assert.equal(request.sourceBridgeAmountUnits, 0n);
+          assert.equal(request.idleUsdcAmountUnits, 0n);
+          splitSources = request.sourceJupiterTransactions ?? [];
+          assert.equal(
+            request.userAmountUnits +
+              request.creatorAmountUnits +
+              request.protocolAmountUnits,
+            10_000_000n,
+          );
+          return {
+            transactionSignature: "spot-withdrawal-split",
+            finalizedSlot: 51n,
+          };
+        },
+      },
+      {
+        loadLatestPricing: async () => ({
+          navReportHash: navHash,
+          basketNavValue: quote.basketNavValue,
+          sharePrice: quote.sharePrice,
+          observedAtSeconds: nowSeconds,
+        }),
+      },
+      {
+        completeDeposit: async () => {
+          throw new Error("unexpected deposit");
+        },
+        completeWithdrawal: async () => ({
+          transactionSignature: "spot-withdrawal-settlement",
+          receiptAddress: "spot-withdrawal-receipt",
+          finalizedSlot: 52n,
+        }),
+        completeProtocolFeeWithdrawal: async () => {
+          throw new Error("unexpected protocol redemption");
+        },
+      },
+      executionGuard,
+      walletCoordinator,
+      undefined,
+      {
+        executeExactIn: async (request) => {
+          const prior = swaps.get(request.idempotencyKey);
+          if (prior !== undefined) return prior;
+          const result = Object.freeze({
+            idempotencyKey: request.idempotencyKey,
+            inputMint: request.inputMint,
+            outputMint: request.outputMint,
+            requestedInputUnits: request.inputAmountUnits,
+            filledInputUnits: request.inputAmountUnits,
+            filledOutputUnits: request.inputAmountUnits,
+            minimumOutputUnits: request.inputAmountUnits * 99n / 100n,
+            transactionSignature: `spot-sell-${swaps.size}`,
+            finalizedSlot: 50n,
+            executedAtMs: nowSeconds * 1_000n,
+            status: "filled" as const,
+          });
+          swaps.set(request.idempotencyKey, result);
+          return result;
+        },
+      },
+    );
+    const result = await workflow.execute({
+      operationId: "22000000-0000-4000-8000-000000000022",
+      requestKey: "spot-withdrawal",
+      workflowId: "spot-withdrawal",
+      intent,
+      polymarketWallet: `0x${"99".repeat(20)}`,
+      walletId: "wallet-spot-withdrawal",
+      totalSharesOutstanding: 100_000_000n,
+      positionSharesOwned: 100_000_000n,
+      positionCostBasisValue: 50_000_000n,
+      weightedDepositTimestamp: nowSeconds - 2_592_000n,
+      idlePusdUnits: 0n,
+      idleUsdcUnits: 0n,
+      targets: spotMints.map((mint, index) => ({
+        kind: "spot" as const,
+        tokenId: `spot-${index}`,
+        tokenMint: mint.toBase58(),
+        weightBps: 2_500,
+        currentUnits: 25_000_000n,
+      })),
+      performanceFeeBps: 1_000,
+      maxSlippageBps: 100,
+      creatorDestination:
+        new PublicKey(new Uint8Array(32).fill(48)).toBase58(),
+      protocolDestination:
+        new PublicKey(new Uint8Array(32).fill(49)).toBase58(),
+      solanaSettlementReceiver: settlementWallet.toBase58(),
+      solanaUsdcMint: usdcMint.toBase58(),
+      solanaChainId: "1151111081099710",
+      settlementNonce: 12n,
+      now,
+    });
+    assert.equal(result.grossRealizedValue, 10_000_000n);
+    assert.equal(result.bridgeTransaction, null);
+    assert.equal(result.orders.length, 0);
+    assert.equal(result.jupiterSwaps.length, 4);
+    assert.equal(splitSources.length, 4);
+    assert.equal(swaps.size, 4);
   });
 
   it("rejects duplicate request keys with different financial content", async () => {
@@ -517,9 +912,10 @@ describe("protocol management-share redemption", () => {
       totalSharesOutstanding: 100_000_000n,
       idlePusdUnits: 0n,
       targets: [
-        { tokenId: "a", weightBps: 4_000, currentUnits: 40_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
-        { tokenId: "b", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
-        { tokenId: "c", weightBps: 3_000, currentUnits: 30_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "a", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "b", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "c", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
+        { tokenId: "d", weightBps: 2_500, currentUnits: 25_000_000n, worstSellPriceUnits: 1_000_000n - 1n, negativeRisk: false },
       ],
       maxSlippageBps: 0,
       polymarketWallet: `0x${"66".repeat(20)}`,
@@ -536,7 +932,7 @@ describe("protocol management-share redemption", () => {
     assert.equal(first.grossRealizedValue, 10_000_000n);
     assert.equal(first.operation.state, "completed");
     assert.equal(replay.executionBatchHash, first.executionBatchHash);
-    assert.equal(orders.size, 3);
+    assert.equal(orders.size, 4);
     assert.equal(transfers.size, 1);
     assert.equal(distributions.size, 1);
     assert.equal(settlements.size, 1);

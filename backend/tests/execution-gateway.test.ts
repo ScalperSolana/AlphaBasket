@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  generateKeyPairSync,
+  sign,
+} from "node:crypto";
 import { once } from "node:events";
 import { describe, it } from "node:test";
 
 import {
+  type Connection,
   Keypair,
   PublicKey,
   SystemProgram,
   Transaction,
+  TransactionMessage,
   TransactionInstruction,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import {
@@ -22,11 +30,16 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   ClobOrderGateway,
   createExecutionGatewayHttpServer,
+  hashGatewayJupiterSwap,
+  JupiterSwapGateway,
   solanaCapitalSplitMessageValidator,
+  solanaJupiterSwapMessageValidator,
+  Web3JupiterSwapFinalityVerifier,
   type GatewayRequestKind,
   type GatewayRequestStorePort,
   type PreparedGatewayRequest,
 } from "../src/gateway/index.js";
+import { JsonHttpClient } from "../src/polymarket/index.js";
 import {
   InMemorySignerAuditSink,
   PolicyEnforcedSigner,
@@ -49,6 +62,11 @@ function sha256(value: unknown): string {
 
 class MemoryGatewayStore implements GatewayRequestStorePort {
   public readonly entries = new Map<string, PreparedGatewayRequest>();
+  public readonly sourceClaims = new Map<string, Readonly<{
+    requestKey: string;
+    requestHash: string;
+    amountUnits: bigint;
+  }>>();
 
   public async prepare(request: {
     readonly requestKey: string;
@@ -124,6 +142,37 @@ class MemoryGatewayStore implements GatewayRequestStorePort {
     }));
   }
 
+  public async claimCapitalSources(request: {
+    readonly requestKey: string;
+    readonly requestHash: string;
+    readonly sources: readonly Readonly<{
+      kind: "bridge_receipt" | "jupiter_swap";
+      reference: string;
+      amountUnits: bigint;
+    }>[];
+    readonly now: Date;
+  }): Promise<void> {
+    for (const source of request.sources) {
+      const key = `${source.kind}:${source.reference}`;
+      const prior = this.sourceClaims.get(key);
+      if (
+        prior !== undefined &&
+        (
+          prior.requestKey !== request.requestKey ||
+          prior.requestHash !== request.requestHash ||
+          prior.amountUnits !== source.amountUnits
+        )
+      ) {
+        throw new Error("capital source was already claimed by another split");
+      }
+      this.sourceClaims.set(key, Object.freeze({
+        requestKey: request.requestKey,
+        requestHash: request.requestHash,
+        amountUnits: source.amountUnits,
+      }));
+    }
+  }
+
   private required(requestKey: string): PreparedGatewayRequest {
     const existing = this.entries.get(requestKey);
     if (existing === undefined) throw new Error("missing gateway request");
@@ -170,6 +219,264 @@ function clobSigner() {
 }
 
 describe("key-holding execution gateway", () => {
+  it("prevents a finalized capital source from funding two different splits", async () => {
+    const store = new MemoryGatewayStore();
+    const source = [{
+      kind: "jupiter_swap" as const,
+      reference: bs58.encode(new Uint8Array(64).fill(7)),
+      amountUnits: 1_000n,
+    }];
+    await store.claimCapitalSources({
+      requestKey: "solana-split:first",
+      requestHash: "1".repeat(64),
+      sources: source,
+      now: NOW,
+    });
+    await store.claimCapitalSources({
+      requestKey: "solana-split:first",
+      requestHash: "1".repeat(64),
+      sources: source,
+      now: NOW,
+    });
+    await assert.rejects(
+      store.claimCapitalSources({
+        requestKey: "solana-split:second",
+        requestHash: "2".repeat(64),
+        sources: source,
+        now: NOW,
+      }),
+      /already claimed/u,
+    );
+  });
+
+  it("reconciles a Jupiter fill against finalized mainnet token deltas", async () => {
+    const taker = Keypair.generate().publicKey;
+    const inputMint = Keypair.generate().publicKey;
+    const outputMint = Keypair.generate().publicKey;
+    const otherMint = Keypair.generate().publicKey;
+    const tokenBalance = (mint: PublicKey, amount: string) => ({
+      accountIndex: 1,
+      mint: mint.toBase58(),
+      owner: taker.toBase58(),
+      uiTokenAmount: {
+        amount,
+        decimals: 6,
+        uiAmount: null,
+        uiAmountString: amount,
+      },
+    });
+    const connection = {
+      getParsedTransaction: async () => ({
+        slot: 44,
+        transaction: {
+          message: {
+            accountKeys: [{
+              pubkey: taker,
+              signer: true,
+              writable: true,
+            }],
+          },
+        },
+        meta: {
+          err: null,
+          preTokenBalances: [
+            tokenBalance(inputMint, "5000"),
+            tokenBalance(outputMint, "100"),
+            tokenBalance(otherMint, "25"),
+          ],
+          postTokenBalances: [
+            tokenBalance(inputMint, "4100"),
+            tokenBalance(outputMint, "1900"),
+            tokenBalance(otherMint, "25"),
+          ],
+        },
+      }),
+    } as unknown as Connection;
+    const verifier = new Web3JupiterSwapFinalityVerifier(connection);
+    const result = await verifier.verifyFinalized({
+      signature: bs58.encode(new Uint8Array(64).fill(8)),
+      taker,
+      inputMint,
+      outputMint,
+      requestedInputUnits: 1_000n,
+      reportedInputUnits: 900n,
+      reportedOutputUnits: 1_800n,
+    });
+    assert.deepEqual(result, {
+      finalizedSlot: 44n,
+      inputDebitUnits: 900n,
+      outputCreditUnits: 1_800n,
+    });
+  });
+
+  it("journals, signs, submits and replays the exact Jupiter Swap V2 transaction", async () => {
+    const pair = generateKeyPairSync("ed25519");
+    const publicDer = pair.publicKey.export({
+      format: "der",
+      type: "spki",
+    });
+    const publicBytes = Uint8Array.from(
+      publicDer.subarray(publicDer.length - 32),
+    );
+    const taker = new PublicKey(publicBytes);
+    const inputMint = Keypair.generate().publicKey;
+    const usdcMint = Keypair.generate().publicKey;
+    const aggregatorProgramId = Keypair.generate().publicKey;
+    const unsigned = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: taker,
+        recentBlockhash: Keypair.generate().publicKey.toBase58(),
+        instructions: [new TransactionInstruction({
+          programId: aggregatorProgramId,
+          keys: [{ pubkey: taker, isSigner: true, isWritable: true }],
+          data: Buffer.from([1]),
+        })],
+      }).compileToV0Message(),
+    );
+    let orderCalls = 0;
+    let executeCalls = 0;
+    const transactionSignature = bs58.encode(
+      new Uint8Array(64).fill(9),
+    );
+    const http = new JsonHttpClient({
+      fetch: async (input, init) => {
+        const url = new URL(input);
+        if (init.method === "GET" && url.pathname.endsWith("/order")) {
+          orderCalls += 1;
+          assert.equal(url.searchParams.get("inputMint"), inputMint.toBase58());
+          assert.equal(url.searchParams.get("outputMint"), usdcMint.toBase58());
+          assert.equal(url.searchParams.get("amount"), "1000");
+          assert.equal(url.searchParams.get("taker"), taker.toBase58());
+          assert.equal(url.searchParams.get("wrapAndUnwrapSol"), "false");
+          return new Response(JSON.stringify({
+            requestId: "jupiter-request-0001",
+            transaction: Buffer.from(unsigned.serialize()).toString("base64"),
+            inputMint: inputMint.toBase58(),
+            outputMint: usdcMint.toBase58(),
+            inAmount: "1000",
+            outAmount: "2000",
+            otherAmountThreshold: "1980",
+            swapMode: "ExactIn",
+          }), { status: 200 });
+        }
+        if (init.method === "POST" && url.pathname.endsWith("/execute")) {
+          executeCalls += 1;
+          const body = JSON.parse(String(init.body)) as {
+            readonly requestId: string;
+            readonly signedTransaction: string;
+          };
+          assert.equal(body.requestId, "jupiter-request-0001");
+          const signed = VersionedTransaction.deserialize(
+            Buffer.from(body.signedTransaction, "base64"),
+          );
+          assert.ok(
+            signed.signatures[0]?.some((byte) => byte !== 0),
+            "the taker signature must be attached before execute",
+          );
+          return new Response(JSON.stringify({
+            status: "Success",
+            code: 0,
+            signature: transactionSignature,
+            slot: "44",
+            inputAmountResult: "900",
+            outputAmountResult: "1800",
+            swapEvents: [{
+              inputMint: inputMint.toBase58(),
+              outputMint: usdcMint.toBase58(),
+              inputAmount: "900",
+              outputAmount: "1800",
+            }],
+          }), { status: 200 });
+        }
+        throw new Error(`unexpected Jupiter request ${init.method} ${input}`);
+      },
+    });
+    const audit = new InMemorySignerAuditSink();
+    const signer = new PolicyEnforcedSigner({
+      policies: [{
+        role: "solana_settlement",
+        keyReference: "kms://solana-settlement-test",
+        algorithm: "ed25519",
+        expectedPublicKey: publicBytes,
+        allowedDomains: new Set([
+          "alphabasket:solana-capital-transaction:v1",
+        ]),
+        allowedActions: new Set(["execute_jupiter_swap"]),
+        allowedNetworks: new Set(["solana-mainnet-beta"]),
+        maxPayloadBytes: 1_232,
+        requireExpiry: true,
+        maxExpiryMs: 60_000,
+        requiredContext: new Set(["intentHash"]),
+        validatePayload: solanaJupiterSwapMessageValidator({
+          sourceOwner: taker,
+          aggregatorProgramId,
+        }),
+      }],
+      keySigner: {
+        sign: async (request) => ({
+          signature: sign(null, request.payload, pair.privateKey),
+          publicKey: publicBytes,
+        }),
+      },
+      auditSink: audit,
+      now: () => NOW,
+    });
+    const store = new MemoryGatewayStore();
+    const gateway = new JupiterSwapGateway(
+      store,
+      signer,
+      http,
+      {
+        deploymentMode: "hybrid_devnet",
+        apiKey: "jupiter-test-key",
+        taker,
+        usdcMint,
+        aggregatorProgramId,
+        maximumInputUnits: 10_000n,
+        finality: {
+          verifyFinalized: async (request) => {
+            assert.equal(request.signature, transactionSignature);
+            assert.ok(request.taker.equals(taker));
+            assert.ok(request.inputMint.equals(inputMint));
+            assert.ok(request.outputMint.equals(usdcMint));
+            assert.equal(request.requestedInputUnits, 1_000n);
+            assert.equal(request.reportedInputUnits, 900n);
+            assert.equal(request.reportedOutputUnits, 1_800n);
+            return {
+              finalizedSlot: 44n,
+              inputDebitUnits: 900n,
+              outputCreditUnits: 1_800n,
+            };
+          },
+        },
+        now: () => NOW,
+      },
+    );
+    const content = {
+      deploymentMode: "hybrid_devnet" as const,
+      idempotencyKey: "jupiter-swap-test-0001",
+      inputMint: inputMint.toBase58(),
+      outputMint: usdcMint.toBase58(),
+      inputAmountUnits: 1_000n,
+      slippageBps: 100,
+      taker: taker.toBase58(),
+    };
+    const request = {
+      ...content,
+      requestHash: hashGatewayJupiterSwap(content),
+    };
+    const first = await gateway.executeExactIn(request);
+    const replay = await gateway.executeExactIn(request);
+    assert.equal(first.transactionSignature, transactionSignature);
+    assert.equal(first.status, "partially_filled");
+    assert.equal(first.filledInputUnits, 900n);
+    assert.deepEqual(replay, first);
+    assert.equal(orderCalls, 1);
+    assert.equal(executeCalls, 1);
+    assert.equal(audit.events.length, 1);
+    assert.equal(store.entries.size, 1);
+  });
+
   it("journals an exact official CLOB v2 FAK body and authenticates that body", async () => {
     const store = new MemoryGatewayStore();
     const { account, audit, signer } = clobSigner();

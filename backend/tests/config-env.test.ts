@@ -34,8 +34,8 @@ test("configuration exposes signer identifiers without accepting raw keys", () =
   assert.equal("privateKey" in config.signers, false);
 });
 
-test("configuration prevents live Jupiter CPI against a devnet accounting program", () => {
-  assert.throws(() => loadBackendConfig({
+test("configuration allows backend Jupiter execution with devnet accounting and mainnet capital", () => {
+  const config = loadBackendConfig({
     NODE_ENV: "test",
     DATABASE_URL: "postgresql://localhost/alphabasket",
     ACCOUNTING_SOLANA_RPC_URL: "https://api.devnet.solana.com",
@@ -43,13 +43,19 @@ test("configuration prevents live Jupiter CPI against a devnet accounting progra
     CAPITAL_SOLANA_RPC_URL: "https://api.mainnet-beta.solana.com",
     CAPITAL_SOLANA_CLUSTER: "mainnet-beta",
     CAPITAL_SOLANA_USDC_MINT: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    SOLANA_SETTLEMENT_RECEIVER: "SysvarRent111111111111111111111111111111111",
+    DEPLOYMENT_MODE: "hybrid_devnet",
+    CAPITAL_MODE: "live_bridge",
     JUPITER_SPOT_ENABLED: "true",
     JUPITER_API_KEY: "test-key",
     COMPOSER_SIGNER_KEY_ID: "composer-test",
     BACKEND_SIGNER_KEY_ID: "backend-test",
     POLYMARKET_SIGNER_KEY_ID: "polymarket-test",
     SOLANA_SETTLEMENT_SIGNER_KEY_ID: "settlement-test",
-  }), /mainnet-beta/u);
+  });
+  assert.equal(config.jupiter.enabled, true);
+  assert.equal(config.deployment.accountingSolanaCluster, "devnet");
+  assert.equal(config.deployment.capitalSolanaCluster, "mainnet-beta");
 });
 
 test("migration configuration requires only the database URL", () => {
