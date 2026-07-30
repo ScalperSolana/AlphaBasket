@@ -23,6 +23,7 @@ import {
 } from "../contract/index.js";
 import idl from "../contract/generated/polybaskets_escrow.json" with { type: "json" };
 import { DepositWorkflow } from "../deposits/index.js";
+import { HttpJupiterExecution } from "../jupiter/index.js";
 import {
   FinancialExecutionOperationRunner,
   PostgresExecutionOperationStore,
@@ -228,6 +229,9 @@ const credit = new PolygonPusdCreditVerifier(
 );
 const transfer = new HttpPolymarketPusdTransfer(http, gatewayOptions);
 const splitter = new HttpSolanaAtomicSplit(http, gatewayOptions);
+const jupiter = config.jupiter.enabled
+  ? new HttpJupiterExecution(http, gatewayOptions)
+  : null;
 const deposit = new DepositWorkflow(
   operationStore,
   bridge,
@@ -238,6 +242,8 @@ const deposit = new DepositWorkflow(
   settlement,
   guard,
   coordinator,
+  undefined,
+  jupiter,
 );
 const withdrawal = new WithdrawalWorkflow(
   operationStore,
@@ -250,6 +256,8 @@ const withdrawal = new WithdrawalWorkflow(
   settlement,
   guard,
   coordinator,
+  undefined,
+  jupiter,
 );
 const queue = new PostgresExecutionWorkQueue(sql);
 const runner = new FinancialExecutionOperationRunner(

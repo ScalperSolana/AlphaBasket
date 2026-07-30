@@ -6,11 +6,13 @@ import type {
   ComposerCandidate,
   ComposerClockPort,
   ComposerPolicy,
+  CreatorMarketWeight,
   ComposerSignerPort,
   CompositionMessageEncoderPort,
   CompositionSigningPayload,
   SolanaBasketCreationGatewayPort,
   SolanaBasketCreationResult,
+  SpotCompositionSelection,
 } from "./types.js";
 
 export interface ComposeAndCreateBasketCommand {
@@ -20,9 +22,12 @@ export interface ComposeAndCreateBasketCommand {
   readonly isPerpetual: boolean;
   readonly reconstitutionCadenceSecs: bigint;
   readonly compositionNonce: bigint;
+  readonly eligibilityNonce: bigint;
   readonly compositionExpiry: bigint;
   readonly performanceFeeBps?: number;
   readonly candidates: readonly ComposerCandidate[];
+  readonly creatorWeights: readonly CreatorMarketWeight[];
+  readonly spotSelections?: readonly SpotCompositionSelection[];
   readonly policy: ComposerPolicy;
 }
 
@@ -34,7 +39,8 @@ export class ContractCompositionMessageEncoder implements CompositionMessageEnco
         basketId: payload.basketId,
         creator: payload.creator,
         creatorFeeDestination: payload.creatorFeeDestination,
-        compositionHash: payload.composition.hashBytes,
+        eligibilityHash: payload.composition.eligibilityHashBytes,
+        eligibilityNonce: payload.eligibilityNonce,
         performanceFeeBps: payload.performanceFeeBps,
         isPerpetual: payload.isPerpetual,
         reconstitutionCadenceSecs: payload.reconstitutionCadenceSecs,
@@ -68,7 +74,13 @@ export class BasketCreationOrchestrator {
     ) {
       throw new RangeError("performanceFeeBps must be an integer between 0 and 2000");
     }
-    const composition = this.composer.compose(command.candidates, command.policy, this.clock.nowMs());
+    const composition = this.composer.compose(
+      command.candidates,
+      command.creatorWeights,
+      command.policy,
+      this.clock.nowMs(),
+      command.spotSelections ?? [],
+    );
     const payload: CompositionSigningPayload = Object.freeze({
       basketId: Uint8Array.from(command.basketId),
       creator: command.creator,
@@ -79,6 +91,7 @@ export class BasketCreationOrchestrator {
       reconstitutionCadenceSecs: command.reconstitutionCadenceSecs,
       compositionNonce: command.compositionNonce,
       compositionExpiry: command.compositionExpiry,
+      eligibilityNonce: command.eligibilityNonce,
       composition,
     });
     const encodedMessage = Uint8Array.from(this.encoder.encode(payload));

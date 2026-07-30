@@ -19,16 +19,9 @@ import { connection, USDC_MINT } from '@/lib/solana/connection';
 import idlJson from '@/lib/solana/idl/polybaskets_escrow.json';
 import type { PolybasketsEscrow } from '@/lib/solana/idl/polybaskets_escrow';
 import type { SignedQuote } from '@/lib/solana/quoteApi';
-import {
-  MAX_BASKET_DEPOSIT_USDC_UNITS,
-  MAX_USER_DEPOSIT_USDC_UNITS,
-} from '@/lib/solana/escrowEconomics';
-
 export {
   DEPOSIT_FEE_BPS,
   WITHDRAWAL_FEE_BPS,
-  MAX_BASKET_DEPOSIT_USDC_UNITS,
-  MAX_USER_DEPOSIT_USDC_UNITS,
   feeUnitsCeil,
   netDepositUnits,
 } from '@/lib/solana/escrowEconomics';
@@ -245,9 +238,6 @@ export async function stakeWithQuote(
 ): Promise<string> {
   const program = escrowProgram(wallet);
   const owner = wallet.publicKey;
-  if (amountUnits > MAX_USER_DEPOSIT_USDC_UNITS) {
-    throw new Error('A wallet may deposit at most 500 USDC into one basket.');
-  }
   const stakerUsdc = getAssociatedTokenAddressSync(USDC_MINT, owner);
 
   const edIx = Ed25519Program.createInstructionWithPublicKey({

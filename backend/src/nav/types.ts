@@ -1,6 +1,7 @@
 export type MarkCondition = "fresh" | "stale" | "illiquid" | "unavailable";
 
 export interface BasketAttributedHolding {
+  readonly assetKind?: "prediction_market" | "spot";
   readonly marketId: string;
   readonly tokenId: string;
   /** Off-chain execution metadata; intentionally not part of the Solana composition account. */
@@ -10,6 +11,7 @@ export interface BasketAttributedHolding {
   readonly quantityUnits: bigint;
   readonly markPriceUnits: bigint;
   readonly priceScale: bigint;
+  readonly tokenDecimals?: number;
   readonly markObservedAtMs: bigint;
   readonly markSourceHash: string;
   readonly markCondition: MarkCondition;
@@ -21,6 +23,7 @@ export interface BasketAttributedState {
   readonly compositionVersion: bigint;
   readonly compositionHash: string;
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits?: bigint;
   readonly holdings: readonly BasketAttributedHolding[];
 }
 
@@ -51,6 +54,7 @@ export interface BasketShareSupplyProjectionWriterPort {
 }
 
 export interface NavHoldingValue {
+  readonly assetKind?: "prediction_market" | "spot";
   readonly marketId: string;
   readonly tokenId: string;
   readonly outcome: string;
@@ -74,6 +78,7 @@ export interface NavSnapshot {
   readonly sequence: bigint;
   readonly observedAtMs: bigint;
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits?: bigint;
   readonly positionValuePusdUnits: bigint;
   readonly grossNavPusdUnits: bigint;
   readonly onchainTotalSharesUnits: bigint;

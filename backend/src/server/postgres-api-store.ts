@@ -42,6 +42,13 @@ const basketAccountSchema = z.object({
   hasInitializedSharePrice: z.boolean(),
   totalSharesOutstanding: integerText,
   status: z.unknown(),
+  items: z.array(z.object({
+    weightBps: indexedInteger,
+    kind: z.union([
+      z.object({ predictionMarket: z.unknown() }).passthrough(),
+      z.object({ spot: z.unknown() }).passthrough(),
+    ]),
+  }).passthrough()).min(1).max(16),
 }).passthrough();
 const configAccountSchema = z.object({
   maxSlippageBps: indexedInteger,
@@ -194,6 +201,19 @@ export class PostgresQuoteContextStore implements QuoteContextPort {
         }
         sharePrice = BigInt(snapshot.sharePriceUnits);
       }
+      const executionAssets = basketAccount.items.map((item) => {
+        const weightBps = Number(BigInt(item.weightBps));
+        if (!Number.isSafeInteger(weightBps) || weightBps <= 0 || weightBps > 4_000) {
+          throw new TypeError("indexed basket execution weight is invalid");
+        }
+        return Object.freeze({
+          kind: "spot" in item.kind ? "spot" as const : "prediction_market" as const,
+          weightBps,
+        });
+      });
+      if (executionAssets.reduce((sum, item) => sum + item.weightBps, 0) !== 10_000) {
+        throw new TypeError("indexed basket execution weights do not total 10,000 bps");
+      }
       return Object.freeze({
         basket,
         user,
@@ -208,6 +228,7 @@ export class PostgresQuoteContextStore implements QuoteContextPort {
         sharesOwned: position.sharesOwned,
         costBasisValue: position.costBasisValue,
         weightedDepositTimestamp: position.weightedDepositTimestamp,
+        executionAssets: Object.freeze(executionAssets),
       });
     }, { isolation: "repeatable read", readOnly: true });
   }
@@ -498,10 +519,12 @@ export class PostgresFinancialRequestStore implements FinancialRequestStorePort 
     readonly basketId: string;
     readonly compositionHash: string;
     readonly items: readonly Readonly<{
+      readonly assetKind?: "prediction_market" | "spot";
       readonly marketId: string;
-      readonly conditionId: string;
+      readonly conditionId?: string;
       readonly tokenId: string;
       readonly outcome: string;
+      readonly tokenDecimals?: number;
       readonly initialMarkPriceUnits: bigint;
       readonly markObservedAtMs: bigint;
       readonly markSourceHash: string;
@@ -515,8 +538,8 @@ export class PostgresFinancialRequestStore implements FinancialRequestStorePort 
       await transaction.query(
         `INSERT INTO basket_portfolio_states (
            basket_id, ledger_version, composition_version,
-           composition_hash, idle_pusd_units, updated_at
-         ) VALUES ($1, $2, 1, $3, 0, $4)
+           composition_hash, idle_pusd_units, idle_usdc_units, updated_at
+         ) VALUES ($1, $2, 1, $3, 0, 0, $4)
          ON CONFLICT (basket_id) DO NOTHING`,
         [
           request.basketId,
@@ -535,27 +558,50 @@ export class PostgresFinancialRequestStore implements FinancialRequestStorePort 
         throw new Error("basket portfolio bootstrap conflicts with existing state");
       }
       for (const item of request.items) {
+        const assetKind = item.assetKind ?? "prediction_market";
+        if (
+          assetKind === "spot" &&
+          (
+            item.tokenDecimals === undefined ||
+            !Number.isInteger(item.tokenDecimals) ||
+            item.tokenDecimals < 0 ||
+            item.tokenDecimals > 18
+          )
+        ) {
+          throw new TypeError("spot basket item requires canonical token decimals");
+        }
+        if (
+          assetKind === "prediction_market" &&
+          item.tokenDecimals !== undefined
+        ) {
+          throw new TypeError("prediction basket item cannot carry token decimals");
+        }
         await transaction.query(
           `INSERT INTO basket_holding_projections (
              basket_id, market_id, token_id, condition_id, negative_risk,
              outcome, quantity_units, mark_price_units, price_scale,
-             mark_observed_at_ms, mark_source_hash, mark_condition, updated_at
+             mark_observed_at_ms, mark_source_hash, mark_condition, updated_at,
+             asset_kind, token_decimals
            ) VALUES (
              $1, $2, $3, $4, NULL, $5, 0, $6::numeric, $7::numeric,
-             $8::numeric, $9, 'fresh', $10
+             $8::numeric, $9, 'fresh', $10, $11, $12
            )
            ON CONFLICT (basket_id, market_id, token_id, outcome) DO NOTHING`,
           [
             request.basketId,
             item.marketId,
             item.tokenId,
-            item.conditionId,
+            item.conditionId ?? null,
             item.outcome,
             item.initialMarkPriceUnits.toString(10),
-            NAV_SHARE_PRICE_SCALE.toString(10),
+            (assetKind === "spot"
+              ? 10n ** BigInt(item.tokenDecimals as number)
+              : NAV_SHARE_PRICE_SCALE).toString(10),
             item.markObservedAtMs.toString(10),
             item.markSourceHash,
             request.now,
+            assetKind,
+            item.tokenDecimals ?? null,
           ],
         );
       }

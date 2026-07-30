@@ -1,10 +1,12 @@
 import { hostname } from "node:os";
 
 import { Pool } from "pg";
+import { PublicKey } from "@solana/web3.js";
 
 import { loadBackendConfig } from "../config/index.js";
 import {
   ClobBasketMarkRefreshService,
+  HybridBasketMarkRefreshService,
   NavSnapshotService,
   PostgresBasketAttributedHoldings,
   PostgresBasketHoldingMarkWriter,
@@ -13,6 +15,7 @@ import {
   PostgresNavSnapshotStore,
   UnimplementedStaleOrIlliquidMarkPolicy,
 } from "../nav/index.js";
+import { JupiterPriceV3Client } from "../jupiter/index.js";
 import { PgSqlClient } from "../persistence/index.js";
 import {
   ClobRestMarketData,
@@ -37,12 +40,26 @@ const clob = new ClobRestMarketData(
   new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
   { baseUrl: config.polymarket.clobUrl },
 );
-const marks = new ClobBasketMarkRefreshService(
-  holdings,
-  clob,
-  new PostgresBasketHoldingMarkWriter(sql),
-  { maxBookAgeMs: config.readPlane.navMaxMarkAgeMs },
-);
+const markWriter = new PostgresBasketHoldingMarkWriter(sql);
+const marks = config.jupiter.enabled
+  ? new HybridBasketMarkRefreshService(
+      holdings,
+      clob,
+      new JupiterPriceV3Client(
+        new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
+        config.jupiter.apiKey as string,
+        config.jupiter.priceUrl,
+      ),
+      new PublicKey(config.solana.capital.usdcMint),
+      markWriter,
+      { maxBookAgeMs: config.readPlane.navMaxMarkAgeMs },
+    )
+  : new ClobBasketMarkRefreshService(
+      holdings,
+      clob,
+      markWriter,
+      { maxBookAgeMs: config.readPlane.navMaxMarkAgeMs },
+    );
 const snapshots = new NavSnapshotService(
   holdings,
   new PostgresBasketShareSupply(sql),
@@ -80,6 +97,7 @@ process.stdout.write(`${JSON.stringify({
   ownerId: `${hostname()}:${process.pid.toString(10)}`,
   intervalMs: config.readPlane.navSnapshotIntervalMs,
   maxMarkAgeMs: config.readPlane.navMaxMarkAgeMs.toString(10),
+  jupiterSpotEnabled: config.jupiter.enabled,
 })}\n`);
 try {
   await worker.run(controller.signal);

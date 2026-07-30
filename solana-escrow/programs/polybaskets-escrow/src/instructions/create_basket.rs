@@ -6,11 +6,15 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     COMPOSITION_DOMAIN, DEFAULT_CREATOR_PERFORMANCE_FEE_BPS, ED25519_ID, MAX_BASKET_ITEMS, MAX_BPS,
-    MAX_CREATOR_PERFORMANCE_FEE_BPS, MAX_MARKET_ID_LEN, MAX_MARKET_WEIGHT_BPS,
+    MAX_CREATOR_PERFORMANCE_FEE_BPS, MAX_MARKET_ID_LEN, MAX_MIXED_WEIGHT_BPS,
+    MAX_SINGLE_SOURCE_WEIGHT_BPS,
 };
 use crate::errors::EscrowError;
 use crate::events::BasketCreated;
-use crate::state::{Basket, BasketAsset, BasketStatus, Config, CreateBasketArgs, PositionKind};
+use crate::state::{
+    Basket, BasketAsset, BasketStatus, CompositionDraft, Config, CreateBasketArgs, EligibilityList,
+    PositionKind, TokenAllowlist,
+};
 
 #[derive(Accounts)]
 #[instruction(args: CreateBasketArgs)]
@@ -29,6 +33,26 @@ pub struct CreateBasket<'info> {
         space = 8 + Basket::INIT_SPACE,
     )]
     pub basket: Account<'info, Basket>,
+    #[account(
+        seeds = [
+            b"composition_draft",
+            args.composition_hash.as_ref(),
+            args.composition_nonce.to_le_bytes().as_ref(),
+        ],
+        bump = composition_draft.bump,
+        constraint = composition_draft.composer == composer_signer.key() @ EscrowError::UnauthorizedCompositionSigner,
+    )]
+    pub composition_draft: Account<'info, CompositionDraft>,
+    #[account(
+        seeds = [
+            b"eligibility",
+            args.eligibility_hash.as_ref(),
+            args.eligibility_nonce.to_le_bytes().as_ref(),
+        ],
+        bump = eligibility_list.bump,
+        constraint = eligibility_list.composer == composer_signer.key() @ EscrowError::UnauthorizedCompositionSigner,
+    )]
+    pub eligibility_list: Account<'info, EligibilityList>,
     #[account(mut)]
     pub composer_signer: Signer<'info>,
     /// CHECK: constrained to the native instructions sysvar.
@@ -67,8 +91,26 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
         args.composition_expiry > now,
         EscrowError::CompositionAuthorizationExpired
     );
-    validate_basket_items(&args.items)?;
-    let composition_bytes = canonical_composition_bytes(&args.items)?;
+    require!(
+        ctx.accounts.eligibility_list.list_hash == args.eligibility_hash
+            && ctx.accounts.eligibility_list.nonce == args.eligibility_nonce
+            && ctx.accounts.eligibility_list.published_at <= now
+            && ctx.accounts.eligibility_list.expires_at > now,
+        EscrowError::InvalidEligibilityList
+    );
+    require!(
+        ctx.accounts.composition_draft.composition_hash == args.composition_hash
+            && ctx.accounts.composition_draft.eligibility_hash == args.eligibility_hash
+            && ctx.accounts.composition_draft.eligibility_nonce == args.eligibility_nonce
+            && ctx.accounts.composition_draft.composition_nonce == args.composition_nonce,
+        EscrowError::CompositionHashMismatch
+    );
+    validate_basket_items(
+        &ctx.accounts.composition_draft.items,
+        &ctx.accounts.eligibility_list,
+        ctx.remaining_accounts,
+    )?;
+    let composition_bytes = canonical_composition_bytes(&ctx.accounts.composition_draft.items)?;
     require!(
         Sha256::digest(&composition_bytes).as_slice() == args.composition_hash,
         EscrowError::CompositionHashMismatch
@@ -107,7 +149,7 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
     basket.created_at = now;
     basket.last_reconstitution_at = now;
     basket.updated_at = now;
-    basket.items = args.items;
+    basket.items = ctx.accounts.composition_draft.items.clone();
     basket.bump = ctx.bumps.basket;
 
     emit!(BasketCreated {
@@ -121,41 +163,108 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
     Ok(())
 }
 
-pub(crate) fn validate_basket_items(items: &[BasketAsset]) -> Result<()> {
+pub(crate) fn validate_basket_items(
+    items: &[BasketAsset],
+    eligibility_list: &EligibilityList,
+    spot_allowlist_accounts: &[AccountInfo],
+) -> Result<()> {
     require!(
         !items.is_empty() && items.len() <= MAX_BASKET_ITEMS,
         EscrowError::InvalidBasketItems
     );
 
+    let has_prediction = items
+        .iter()
+        .any(|item| matches!(&item.kind, PositionKind::PredictionMarket { .. }));
+    let has_spot = items
+        .iter()
+        .any(|item| matches!(&item.kind, PositionKind::Spot { .. }));
+    let weight_cap = if has_prediction && has_spot {
+        MAX_MIXED_WEIGHT_BPS
+    } else {
+        MAX_SINGLE_SOURCE_WEIGHT_BPS
+    };
+    if !has_prediction {
+        require!(
+            eligibility_list.markets.is_empty(),
+            EscrowError::InvalidEligibilityList
+        );
+    }
+    require!(
+        spot_allowlist_accounts.len() == usize::from(has_spot),
+        EscrowError::TokenNotAllowlisted
+    );
+
     let mut total_weight: u32 = 0;
     for (index, item) in items.iter().enumerate() {
-        let PositionKind::PredictionMarket {
-            outcome,
-            ctf_token_id,
-        } = &item.kind;
         require!(
             !item.market_id.is_empty()
                 && item.market_id.len() <= MAX_MARKET_ID_LEN
-                && *outcome <= 1
-                && *ctf_token_id != [0u8; 32]
-                && item.weight_bps > 0
-                && item.weight_bps <= MAX_BPS,
+                && item.weight_bps > 0,
             EscrowError::InvalidBasketItems
         );
-        // Second layer of protection after the Composer's off-chain formula.
         require!(
-            item.weight_bps <= MAX_MARKET_WEIGHT_BPS,
+            item.weight_bps <= weight_cap,
             EscrowError::MarketWeightExceeded
         );
+
+        match &item.kind {
+            PositionKind::PredictionMarket {
+                outcome,
+                ctf_token_id,
+            } => {
+                require!(
+                    *outcome <= 1 && *ctf_token_id != [0u8; 32],
+                    EscrowError::InvalidBasketItems
+                );
+                require!(
+                    eligibility_list.markets.iter().any(|eligible| {
+                        eligible.market_id == item.market_id
+                            && eligible.outcome == *outcome
+                            && eligible.ctf_token_id == *ctf_token_id
+                    }),
+                    EscrowError::MarketNotEligible
+                );
+            }
+            PositionKind::Spot { token_mint } => {
+                require!(
+                    *token_mint != Pubkey::default(),
+                    EscrowError::InvalidBasketItems
+                );
+                let account = spot_allowlist_accounts
+                    .first()
+                    .ok_or(EscrowError::TokenNotAllowlisted)?;
+                validate_spot_allowlist_account(account, token_mint)?;
+            }
+        }
+
         for other in items.iter().skip(index + 1) {
-            let PositionKind::PredictionMarket {
-                ctf_token_id: other_ctf_token_id,
-                ..
-            } = &other.kind;
-            require!(
-                item.market_id != other.market_id && ctf_token_id != other_ctf_token_id,
-                EscrowError::InvalidBasketItems
-            );
+            match (&item.kind, &other.kind) {
+                (
+                    PositionKind::PredictionMarket { ctf_token_id, .. },
+                    PositionKind::PredictionMarket {
+                        ctf_token_id: other_ctf_token_id,
+                        ..
+                    },
+                ) => {
+                    require!(
+                        item.market_id != other.market_id && ctf_token_id != other_ctf_token_id,
+                        EscrowError::InvalidBasketItems
+                    );
+                }
+                (
+                    PositionKind::Spot { token_mint },
+                    PositionKind::Spot {
+                        token_mint: other_token_mint,
+                    },
+                ) => {
+                    require!(
+                        token_mint != other_token_mint,
+                        EscrowError::InvalidBasketItems
+                    );
+                }
+                _ => {}
+            }
         }
         total_weight = total_weight
             .checked_add(item.weight_bps as u32)
@@ -187,6 +296,10 @@ pub(crate) fn canonical_composition_bytes(items: &[BasketAsset]) -> Result<Vec<u
                 bytes.push(*outcome);
                 bytes.extend_from_slice(ctf_token_id);
             }
+            PositionKind::Spot { token_mint } => {
+                bytes.push(1);
+                bytes.extend_from_slice(token_mint.as_ref());
+            }
         }
         bytes.extend_from_slice(&item.weight_bps.to_le_bytes());
     }
@@ -200,13 +313,32 @@ fn create_composition_message(args: &CreateBasketArgs, performance_fee_bps: u16)
     message.extend_from_slice(&args.basket_id);
     message.extend_from_slice(args.creator.as_ref());
     message.extend_from_slice(args.creator_fee_destination.as_ref());
-    message.extend_from_slice(&args.composition_hash);
+    message.extend_from_slice(&args.eligibility_hash);
+    message.extend_from_slice(&args.eligibility_nonce.to_le_bytes());
     message.extend_from_slice(&performance_fee_bps.to_le_bytes());
     message.push(u8::from(args.is_perpetual));
     message.extend_from_slice(&args.reconstitution_cadence_secs.to_le_bytes());
     message.extend_from_slice(&args.composition_nonce.to_le_bytes());
     message.extend_from_slice(&args.composition_expiry.to_le_bytes());
     message
+}
+
+fn validate_spot_allowlist_account(account: &AccountInfo, token_mint: &Pubkey) -> Result<()> {
+    require_keys_eq!(*account.owner, crate::ID, EscrowError::TokenNotAllowlisted);
+    let (expected, _) = Pubkey::find_program_address(&[b"token_allowlist"], &crate::ID);
+    require_keys_eq!(account.key(), expected, EscrowError::TokenNotAllowlisted);
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| error!(EscrowError::TokenNotAllowlisted))?;
+    let entry = TokenAllowlist::try_deserialize(&mut data.as_ref())
+        .map_err(|_| error!(EscrowError::TokenNotAllowlisted))?;
+    require!(
+        entry.tokens.iter().any(|token| {
+            token.token_mint == *token_mint && token.enabled && token.jupiter_verified
+        }),
+        EscrowError::TokenNotAllowlisted
+    );
+    Ok(())
 }
 
 pub(crate) fn verify_composer_signature(

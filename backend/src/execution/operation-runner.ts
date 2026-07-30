@@ -34,9 +34,15 @@ const predictionMarket = z.object({
   outcome: indexedInteger,
   ctfTokenId: z.string().regex(/^[0-9a-f]{64}$/u),
 }).passthrough();
+const spot = z.object({
+  tokenMint: publicKey,
+}).passthrough();
 const basketAsset = z.object({
   marketId: z.string().min(1).max(64),
-  kind: z.object({ predictionMarket }).passthrough(),
+  kind: z.union([
+    z.object({ predictionMarket }).passthrough(),
+    z.object({ spot }).passthrough(),
+  ]),
   weightBps: indexedInteger,
 }).passthrough();
 const basketAccount = z.object({
@@ -67,6 +73,7 @@ interface PortfolioRow extends Record<string, unknown> {
   ledger_version: string;
   composition_version: string;
   idle_pusd_units: string;
+  idle_usdc_units: string;
 }
 
 interface HoldingRow extends Record<string, unknown> {
@@ -80,6 +87,8 @@ interface HoldingRow extends Record<string, unknown> {
   mark_observed_at_ms: string;
   mark_source_hash: string;
   mark_condition: BasketAttributedHolding["markCondition"];
+  asset_kind: "prediction_market" | "spot";
+  token_decimals: number | null;
 }
 
 interface SupplyRow extends Record<string, unknown> {
@@ -102,7 +111,8 @@ function numeric(value: string, field: string): bigint {
   return BigInt(value);
 }
 
-export interface ExecutionTargetState {
+export type ExecutionTargetState = Readonly<{
+  readonly kind: "prediction_market";
   readonly marketId: string;
   readonly conditionId: string | null;
   readonly tokenId: string;
@@ -110,7 +120,18 @@ export interface ExecutionTargetState {
   readonly outcomeIndex: number;
   readonly weightBps: number;
   readonly currentUnits: bigint;
-}
+}> | Readonly<{
+  readonly kind: "spot";
+  readonly marketId: string;
+  readonly conditionId: null;
+  readonly tokenId: string;
+  readonly tokenMint: string;
+  readonly tokenDecimals: number;
+  readonly outcome: "spot";
+  readonly outcomeIndex: -1;
+  readonly weightBps: number;
+  readonly currentUnits: bigint;
+}>;
 
 export interface FinancialExecutionContext {
   readonly basket: PublicKey;
@@ -127,6 +148,7 @@ export interface FinancialExecutionContext {
   readonly weightedDepositTimestamp: bigint;
   readonly ledgerVersion: string;
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits: bigint;
   readonly targets: readonly ExecutionTargetState[];
 }
 
@@ -156,12 +178,14 @@ export class PostgresFinancialExecutionContext implements FinancialExecutionCont
         ),
         transaction.query<PortfolioRow>(
           `SELECT ledger_version, composition_version::text AS composition_version,
-                  idle_pusd_units::text AS idle_pusd_units
+                  idle_pusd_units::text AS idle_pusd_units,
+                  idle_usdc_units::text AS idle_usdc_units
            FROM basket_portfolio_states WHERE basket_id = $1 FOR SHARE`,
           [basket.toBase58()],
         ),
         transaction.query<HoldingRow>(
-          `SELECT market_id, token_id, condition_id, outcome,
+          `SELECT market_id, token_id, condition_id, outcome, asset_kind,
+                  token_decimals,
                   quantity_units::text AS quantity_units,
                   mark_price_units::text AS mark_price_units,
                   price_scale::text AS price_scale,
@@ -197,22 +221,61 @@ export class PostgresFinancialExecutionContext implements FinancialExecutionCont
       }
       const holdingByToken = new Map(holdingsResult.rows.map((holding) => [holding.token_id, holding]));
       const targets = decodedBasket.items.map((item): ExecutionTargetState => {
-        const tokenId = ctfTokenId(item.kind.predictionMarket.ctfTokenId);
+        const parsedPrediction = predictionMarket.safeParse(item.kind.predictionMarket);
+        const parsedSpot = spot.safeParse(item.kind.spot);
+        const isPrediction = parsedPrediction.success;
+        if (isPrediction === parsedSpot.success) {
+          throw new TypeError("indexed basket position kind is malformed");
+        }
+        const tokenId = isPrediction
+          ? ctfTokenId(parsedPrediction.data.ctfTokenId)
+          : (parsedSpot.success
+              ? parsedSpot.data.tokenMint.toBase58()
+              : (() => { throw new TypeError("indexed spot position is malformed"); })());
         const holding = holdingByToken.get(tokenId);
         if (holding === undefined || holding.market_id !== item.marketId) {
           throw new Error(`portfolio holding is missing for basket token ${tokenId}`);
         }
         const weightBps = Number(BigInt(item.weightBps));
-        const outcomeIndex = Number(BigInt(item.kind.predictionMarket.outcome));
+        const outcomeIndex = isPrediction
+          ? Number(BigInt(parsedPrediction.data.outcome))
+          : -1;
         if (
           !Number.isSafeInteger(weightBps) ||
           weightBps <= 0 ||
           weightBps > 4_000 ||
-          (outcomeIndex !== 0 && outcomeIndex !== 1)
+          (isPrediction && outcomeIndex !== 0 && outcomeIndex !== 1)
         ) {
           throw new TypeError("indexed basket target is invalid");
         }
+        if (!isPrediction) {
+          if (
+            holding.asset_kind !== "spot" ||
+            holding.token_decimals === null ||
+            !Number.isInteger(holding.token_decimals) ||
+            holding.token_decimals < 0 ||
+            holding.token_decimals > 18
+          ) {
+            throw new TypeError("indexed spot holding metadata is invalid");
+          }
+          return Object.freeze({
+            kind: "spot",
+            marketId: item.marketId,
+            conditionId: null,
+            tokenId,
+            tokenMint: tokenId,
+            tokenDecimals: holding.token_decimals,
+            outcome: "spot",
+            outcomeIndex: -1,
+            weightBps,
+            currentUnits: numeric(holding.quantity_units, "holding quantity"),
+          });
+        }
+        if (holding.asset_kind !== "prediction_market") {
+          throw new TypeError("indexed prediction holding has the wrong asset kind");
+        }
         return Object.freeze({
+          kind: "prediction_market",
           marketId: item.marketId,
           conditionId: holding.condition_id,
           tokenId,
@@ -261,6 +324,7 @@ export class PostgresFinancialExecutionContext implements FinancialExecutionCont
         weightedDepositTimestamp: BigInt(position.weightedDepositTimestamp),
         ledgerVersion: portfolio.ledger_version,
         idlePusdUnits: numeric(portfolio.idle_pusd_units, "idle pUSD"),
+        idleUsdcUnits: numeric(portfolio.idle_usdc_units, "idle USDC"),
         targets: Object.freeze(targets),
       });
     }, { isolation: "repeatable read", readOnly: true });
@@ -269,6 +333,7 @@ export class PostgresFinancialExecutionContext implements FinancialExecutionCont
 
 export interface ExecutionPortfolioCommitPort {
   attributedIdlePusd(walletId: string): Promise<bigint>;
+  attributedIdleUsdc?(walletId: string): Promise<bigint>;
   commitDeposit(request: {
     readonly operationId: string;
     readonly basketId: string;
@@ -281,6 +346,7 @@ export interface ExecutionPortfolioCommitPort {
     readonly basketId: string;
     readonly expectedLedgerVersion: string;
     readonly idlePusdConsumed: bigint;
+    readonly idleUsdcConsumed?: bigint;
     readonly result: WithdrawalWorkflowResult;
     readonly now: Date;
   }): Promise<void>;
@@ -305,6 +371,18 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
     return numeric(result.rows[0]?.total ?? "0", "wallet attributed idle pUSD");
   }
 
+  public async attributedIdleUsdc(walletId: string): Promise<bigint> {
+    const result = await this.sql.query<{ total: string }>(
+      `SELECT COALESCE(sum(portfolio.idle_usdc_units), 0)::text AS total
+       FROM wallet_assignments assignment
+       JOIN basket_portfolio_states portfolio
+         ON portfolio.basket_id = assignment.basket_id
+       WHERE assignment.wallet_id = $1`,
+      [walletId],
+    );
+    return numeric(result.rows[0]?.total ?? "0", "wallet attributed idle USDC");
+  }
+
   public async commitDeposit(request: {
     readonly operationId: string;
     readonly basketId: string;
@@ -319,10 +397,17 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
       request.result.executionBatchHash,
       request.now,
       request.result.idlePusdUnits,
-      request.result.orders.map((order) => Object.freeze({
-        tokenId: order.tokenId,
-        quantityDelta: order.filledOutputUnits,
-      })),
+      request.result.idleUsdcUnits,
+      [
+        ...request.result.orders.map((order) => Object.freeze({
+          tokenId: order.tokenId,
+          quantityDelta: order.filledOutputUnits,
+        })),
+        ...request.result.jupiterSwaps.map((swap) => Object.freeze({
+          tokenId: swap.outputMint.toBase58(),
+          quantityDelta: swap.filledOutputUnits,
+        })),
+      ],
     );
   }
 
@@ -331,6 +416,7 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
     readonly basketId: string;
     readonly expectedLedgerVersion: string;
     readonly idlePusdConsumed: bigint;
+    readonly idleUsdcConsumed?: bigint;
     readonly result: WithdrawalWorkflowResult;
     readonly now: Date;
   }): Promise<void> {
@@ -341,10 +427,17 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
       request.result.executionBatchHash,
       request.now,
       -request.idlePusdConsumed,
-      request.result.orders.map((order) => Object.freeze({
-        tokenId: order.tokenId,
-        quantityDelta: -order.filledInputUnits,
-      })),
+      -(request.idleUsdcConsumed ?? request.result.idleUsdcConsumed),
+      [
+        ...request.result.orders.map((order) => Object.freeze({
+          tokenId: order.tokenId,
+          quantityDelta: -order.filledInputUnits,
+        })),
+        ...request.result.jupiterSwaps.map((swap) => Object.freeze({
+          tokenId: swap.inputMint.toBase58(),
+          quantityDelta: -swap.filledInputUnits,
+        })),
+      ],
     );
   }
 
@@ -355,6 +448,7 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
     executionBatchHash: string,
     now: Date,
     idleDelta: bigint,
+    idleUsdcDelta: bigint,
     holdingDeltas: readonly Readonly<{ tokenId: string; quantityDelta: bigint }>[],
   ): Promise<void> {
     await this.sql.transaction(async (transaction) => {
@@ -370,8 +464,9 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
         }
         return;
       }
-      const state = await transaction.query<{ ledger_version: string; idle_pusd_units: string }>(
-        `SELECT ledger_version, idle_pusd_units::text AS idle_pusd_units
+      const state = await transaction.query<{ ledger_version: string; idle_pusd_units: string; idle_usdc_units: string }>(
+        `SELECT ledger_version, idle_pusd_units::text AS idle_pusd_units,
+                idle_usdc_units::text AS idle_usdc_units
          FROM basket_portfolio_states WHERE basket_id = $1 FOR UPDATE`,
         [basketId],
       );
@@ -380,7 +475,9 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
         throw new Error("basket portfolio changed during external execution");
       }
       const nextIdle = numeric(current.idle_pusd_units, "idle pUSD") + idleDelta;
+      const nextIdleUsdc = numeric(current.idle_usdc_units, "idle USDC") + idleUsdcDelta;
       if (nextIdle < 0n) throw new Error("portfolio commit would make idle pUSD negative");
+      if (nextIdleUsdc < 0n) throw new Error("portfolio commit would make idle USDC negative");
       for (const delta of holdingDeltas) {
         const updated = await transaction.query(
           `UPDATE basket_holding_projections
@@ -396,9 +493,10 @@ export class PostgresExecutionPortfolioCommit implements ExecutionPortfolioCommi
       const nextVersion = `execution:${operationId}:${executionBatchHash}`;
       await transaction.query(
         `UPDATE basket_portfolio_states
-         SET ledger_version = $2, idle_pusd_units = $3::numeric, updated_at = $4
+         SET ledger_version = $2, idle_pusd_units = $3::numeric,
+             idle_usdc_units = $4::numeric, updated_at = $5
          WHERE basket_id = $1`,
-        [basketId, nextVersion, nextIdle.toString(10), now],
+        [basketId, nextVersion, nextIdle.toString(10), nextIdleUsdc.toString(10), now],
       );
       await transaction.query(
         `INSERT INTO portfolio_execution_commits (
@@ -441,8 +539,10 @@ function executionContextFingerprint(context: FinancialExecutionContext): string
     context.weightedDepositTimestamp.toString(10),
     context.ledgerVersion,
     context.idlePusdUnits.toString(10),
+    context.idleUsdcUnits.toString(10),
     context.targets.map((target) => [
       target.marketId,
+      target.kind,
       target.conditionId,
       target.tokenId,
       target.outcome,
@@ -489,6 +589,7 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
       throw new Error("signed slippage exceeds the current on-chain policy");
     }
     const books = await Promise.all(context.targets.map(async (target) => {
+      if (target.kind === "spot") return null;
       const book = await this.clob.getOrderBook(target.tokenId);
       if (book.tokenId !== target.tokenId) throw new Error("CLOB returned a different token");
       if (
@@ -521,14 +622,23 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
         preparedBridgeAddress: request.fundingAddress,
         solanaUsdcMint: context.settlementMint.toBase58(),
         protocolFeeDestination: context.protocolFeeDestination.toBase58(),
+        spotFundingDestination: this.options.solanaSettlementReceiver,
         fundingTransactionSignature: request.fundingTransactionSignature,
         maxSlippageBps: quote.maxSlippageBps,
-        targets: context.targets.map((target, index) => Object.freeze({
-          tokenId: target.tokenId,
-          weightBps: target.weightBps,
-          worstBuyPriceUnits: buyBound(books[index] as OrderBook, quote.maxSlippageBps),
-          negativeRisk: (books[index] as OrderBook).negativeRisk,
-        })),
+        targets: context.targets.map((target, index) => target.kind === "spot"
+          ? Object.freeze({
+              kind: "spot" as const,
+              tokenId: target.tokenId,
+              tokenMint: target.tokenMint,
+              weightBps: target.weightBps,
+            })
+          : Object.freeze({
+              kind: "prediction_market" as const,
+              tokenId: target.tokenId,
+              weightBps: target.weightBps,
+              worstBuyPriceUnits: buyBound(books[index] as OrderBook, quote.maxSlippageBps),
+              negativeRisk: (books[index] as OrderBook).negativeRisk,
+            })),
         settlementNonce: context.lastSettlementNonce + 1n,
         capitalMode: this.options.capitalMode,
         beforeExecution: async () => {
@@ -574,6 +684,8 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
       }
       const idlePusdConsumed =
         (context.idlePusdUnits * withdrawalQuote.shareAmount) / context.totalSharesOutstanding;
+      const idleUsdcConsumed =
+        (context.idleUsdcUnits * withdrawalQuote.shareAmount) / context.totalSharesOutstanding;
       const result = await this.withdrawal.execute({
         operationId: request.operationId,
         requestKey: request.requestKey,
@@ -586,13 +698,23 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
         positionCostBasisValue: context.positionCostBasisValue,
         weightedDepositTimestamp: context.weightedDepositTimestamp,
         idlePusdUnits: context.idlePusdUnits,
-        targets: context.targets.map((target, index) => Object.freeze({
-          tokenId: target.tokenId,
-          weightBps: target.weightBps,
-          currentUnits: target.currentUnits,
-          worstSellPriceUnits: sellBound(books[index] as OrderBook, quote.maxSlippageBps),
-          negativeRisk: (books[index] as OrderBook).negativeRisk,
-        })),
+        idleUsdcUnits: context.idleUsdcUnits,
+        targets: context.targets.map((target, index) => target.kind === "spot"
+          ? Object.freeze({
+              kind: "spot" as const,
+              tokenId: target.tokenId,
+              tokenMint: target.tokenMint,
+              weightBps: target.weightBps,
+              currentUnits: target.currentUnits,
+            })
+          : Object.freeze({
+              kind: "prediction_market" as const,
+              tokenId: target.tokenId,
+              weightBps: target.weightBps,
+              currentUnits: target.currentUnits,
+              worstSellPriceUnits: sellBound(books[index] as OrderBook, quote.maxSlippageBps),
+              negativeRisk: (books[index] as OrderBook).negativeRisk,
+            })),
         performanceFeeBps: context.performanceFeeBps,
         maxSlippageBps: quote.maxSlippageBps,
         creatorDestination: context.creatorFeeDestination.toBase58(),
@@ -609,6 +731,7 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
             basketId: quote.basket.toBase58(),
             expectedLedgerVersion: context.ledgerVersion,
             idlePusdConsumed,
+            idleUsdcConsumed,
             result: settled,
             now: new Date(),
           });

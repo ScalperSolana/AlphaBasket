@@ -35,7 +35,10 @@ const splitSchema = z.object({
   requestHash: hash,
   deploymentMode: mode,
   idempotencyKey,
-  sourceBridgeTransaction: transactionSignature,
+  sourceBridgeTransaction: transactionSignature.nullable(),
+  sourceBridgeAmountUnits: canonicalUnsigned.optional(),
+  sourceJupiterTransactions: z.array(transactionSignature).max(64).optional(),
+  idleUsdcAmountUnits: canonicalUnsigned.optional(),
   mint: solanaAddress,
   userDestination: solanaAddress,
   creatorDestination: solanaAddress,
@@ -43,6 +46,16 @@ const splitSchema = z.object({
   userAmountUnits: canonicalUnsigned,
   creatorAmountUnits: canonicalUnsigned,
   protocolAmountUnits: canonicalUnsigned,
+}).strict();
+const jupiterSwapSchema = z.object({
+  requestHash: hash,
+  deploymentMode: mode,
+  idempotencyKey,
+  inputMint: solanaAddress,
+  outputMint: solanaAddress,
+  inputAmountUnits: positiveUnsigned,
+  slippageBps: z.number().int().min(1).max(2_000),
+  taker: solanaAddress,
 }).strict();
 
 function tokenDigest(token: string): Buffer {
@@ -139,10 +152,49 @@ export function createExecutionGatewayHttpServer(options: {
       if (request.url === "/v1/solana/atomic-split") {
         const parsed = splitSchema.safeParse(raw);
         if (!parsed.success) throw new GatewayHttpError(400, "invalid_request");
-        const result = await options.service.splitSolanaUsdc(parsed.data);
+        const result = await options.service.splitSolanaUsdc({
+          requestHash: parsed.data.requestHash,
+          deploymentMode: parsed.data.deploymentMode,
+          idempotencyKey: parsed.data.idempotencyKey,
+          sourceBridgeTransaction: parsed.data.sourceBridgeTransaction,
+          ...(parsed.data.sourceBridgeAmountUnits === undefined
+            ? {}
+            : { sourceBridgeAmountUnits: parsed.data.sourceBridgeAmountUnits }),
+          ...(parsed.data.sourceJupiterTransactions === undefined
+            ? {}
+            : { sourceJupiterTransactions: parsed.data.sourceJupiterTransactions }),
+          ...(parsed.data.idleUsdcAmountUnits === undefined
+            ? {}
+            : { idleUsdcAmountUnits: parsed.data.idleUsdcAmountUnits }),
+          mint: parsed.data.mint,
+          userDestination: parsed.data.userDestination,
+          creatorDestination: parsed.data.creatorDestination,
+          protocolDestination: parsed.data.protocolDestination,
+          userAmountUnits: parsed.data.userAmountUnits,
+          creatorAmountUnits: parsed.data.creatorAmountUnits,
+          protocolAmountUnits: parsed.data.protocolAmountUnits,
+        });
         writeJson(response, 200, {
           ...result,
           finalizedSlot: result.finalizedSlot.toString(10),
+        });
+        return;
+      }
+      if (request.url === "/v1/jupiter/exact-in") {
+        const parsed = jupiterSwapSchema.safeParse(raw);
+        if (!parsed.success) throw new GatewayHttpError(400, "invalid_request");
+        if (options.service.executeJupiterSwap === undefined) {
+          throw new GatewayHttpError(404, "jupiter_execution_disabled");
+        }
+        const result = await options.service.executeJupiterSwap(parsed.data);
+        writeJson(response, 200, {
+          ...result,
+          requestedInputUnits: result.requestedInputUnits.toString(10),
+          filledInputUnits: result.filledInputUnits.toString(10),
+          filledOutputUnits: result.filledOutputUnits.toString(10),
+          minimumOutputUnits: result.minimumOutputUnits.toString(10),
+          finalizedSlot: result.finalizedSlot.toString(10),
+          executedAtMs: result.executedAtMs.toString(10),
         });
         return;
       }

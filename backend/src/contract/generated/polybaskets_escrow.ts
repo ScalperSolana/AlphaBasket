@@ -601,6 +601,74 @@ export type PolybasketsEscrow = {
           }
         },
         {
+          "name": "compositionDraft",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibilityList",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
           "name": "backendSigner",
           "signer": true,
           "relations": [
@@ -827,6 +895,74 @@ export type PolybasketsEscrow = {
           }
         },
         {
+          "name": "compositionDraft",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibilityList",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
           "name": "composerSigner",
           "writable": true,
           "signer": true,
@@ -968,6 +1104,223 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "publishCompositionDraft",
+      "docs": [
+        "Publishes a creator-selected weighted composition in a size-safe prior transaction."
+      ],
+      "discriminator": [
+        25,
+        204,
+        60,
+        116,
+        175,
+        6,
+        255,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "compositionDraft",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  100,
+                  114,
+                  97,
+                  102,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.composition_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibilityList",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.eligibility_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composerSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "publishCompositionDraftArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "publishEligibilityList",
+      "docs": [
+        "Publishes a short-lived Composer-screened prediction-market list."
+      ],
+      "discriminator": [
+        90,
+        36,
+        193,
+        106,
+        49,
+        100,
+        73,
+        83
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eligibilityList",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.list_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composerSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "publishEligibilityListArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "recordFinalSettlement",
       "docs": [
         "Records the final NAV and share snapshot for deterministic redemptions."
@@ -1039,6 +1392,92 @@ export type PolybasketsEscrow = {
           "type": {
             "defined": {
               "name": "finalSettlementArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "registerToken",
+      "docs": [
+        "Adds, updates, disables, or re-enables a Jupiter spot-token allowlist entry."
+      ],
+      "discriminator": [
+        32,
+        146,
+        36,
+        240,
+        80,
+        183,
+        36,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenAllowlist",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  95,
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "registerTokenArgs"
             }
           }
         }
@@ -1207,6 +1646,129 @@ export type PolybasketsEscrow = {
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "submitPriceAttestation",
+      "docs": [
+        "Records a fresh Composer-signed TWAP for a signed-fallback spot token."
+      ],
+      "discriminator": [
+        4,
+        29,
+        113,
+        80,
+        88,
+        153,
+        24,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenAllowlist",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  111,
+                  107,
+                  101,
+                  110,
+                  95,
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "priceAttestation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composerSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "ixSysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "submitPriceAttestationArgs"
+            }
+          }
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1224,6 +1786,19 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "compositionDraft",
+      "discriminator": [
+        229,
+        119,
+        58,
+        168,
+        134,
+        105,
+        155,
+        89
+      ]
+    },
+    {
       "name": "config",
       "discriminator": [
         155,
@@ -1234,6 +1809,19 @@ export type PolybasketsEscrow = {
         250,
         204,
         130
+      ]
+    },
+    {
+      "name": "eligibilityList",
+      "discriminator": [
+        246,
+        60,
+        135,
+        157,
+        45,
+        199,
+        223,
+        164
       ]
     },
     {
@@ -1250,6 +1838,19 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "priceAttestation",
+      "discriminator": [
+        14,
+        221,
+        251,
+        189,
+        238,
+        210,
+        139,
+        75
+      ]
+    },
+    {
       "name": "settlementReceipt",
       "discriminator": [
         52,
@@ -1260,6 +1861,19 @@ export type PolybasketsEscrow = {
         232,
         187,
         4
+      ]
+    },
+    {
+      "name": "tokenAllowlist",
+      "discriminator": [
+        153,
+        168,
+        129,
+        66,
+        180,
+        22,
+        0,
+        239
       ]
     }
   ],
@@ -1356,6 +1970,19 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "compositionDraftPublished",
+      "discriminator": [
+        126,
+        168,
+        91,
+        172,
+        81,
+        218,
+        54,
+        128
+      ]
+    },
+    {
       "name": "configInitialized",
       "discriminator": [
         181,
@@ -1379,6 +2006,19 @@ export type PolybasketsEscrow = {
         147,
         84,
         58
+      ]
+    },
+    {
+      "name": "eligibilityListPublished",
+      "discriminator": [
+        83,
+        75,
+        82,
+        229,
+        241,
+        90,
+        84,
+        240
       ]
     },
     {
@@ -1434,6 +2074,19 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "priceAttestationSubmitted",
+      "discriminator": [
+        69,
+        65,
+        9,
+        61,
+        104,
+        145,
+        192,
+        154
+      ]
+    },
+    {
       "name": "protocolFeeSharesWithdrawn",
       "discriminator": [
         68,
@@ -1444,6 +2097,19 @@ export type PolybasketsEscrow = {
         210,
         142,
         244
+      ]
+    },
+    {
+      "name": "tokenAllowlistUpdated",
+      "discriminator": [
+        62,
+        137,
+        236,
+        201,
+        142,
+        26,
+        158,
+        148
       ]
     },
     {
@@ -1543,146 +2209,166 @@ export type PolybasketsEscrow = {
     },
     {
       "code": 6016,
+      "name": "marketNotEligible",
+      "msg": "Selected prediction market is absent from the signed eligibility list"
+    },
+    {
+      "code": 6017,
+      "name": "invalidEligibilityList",
+      "msg": "Eligibility list is malformed, stale, or does not match its hash"
+    },
+    {
+      "code": 6018,
+      "name": "tokenNotAllowlisted",
+      "msg": "Spot token is not enabled in the on-chain allowlist"
+    },
+    {
+      "code": 6019,
+      "name": "invalidTokenMetadata",
+      "msg": "Token allowlist metadata is invalid"
+    },
+    {
+      "code": 6020,
+      "name": "invalidPriceAttestation",
+      "msg": "Signed spot-price attestation is malformed, stale, or unsupported"
+    },
+    {
+      "code": 6021,
+      "name": "priceAttestationNonceNotIncreasing",
+      "msg": "Spot-price attestation nonce must increase"
+    },
+    {
+      "code": 6022,
       "name": "invalidBasketStatus",
       "msg": "Basket status does not allow this action"
     },
     {
-      "code": 6017,
+      "code": 6023,
       "name": "basketNotPerpetual",
       "msg": "Only perpetual baskets can be reconstituted"
     },
     {
-      "code": 6018,
+      "code": 6024,
       "name": "missingIntentSignature",
       "msg": "User intent signature instruction is missing"
     },
     {
-      "code": 6019,
+      "code": 6025,
       "name": "malformedIntentSignature",
       "msg": "User intent signature instruction is malformed"
     },
     {
-      "code": 6020,
+      "code": 6026,
       "name": "unauthorizedIntentSigner",
       "msg": "Intent signature was produced by the wrong user"
     },
     {
-      "code": 6021,
+      "code": 6027,
       "name": "intentSignatureMismatch",
       "msg": "Signed user intent does not match the completion"
     },
     {
-      "code": 6022,
+      "code": 6028,
       "name": "intentExpired",
       "msg": "User intent has expired"
     },
     {
-      "code": 6023,
+      "code": 6029,
       "name": "intentNonceMismatch",
       "msg": "User intent nonce must be exactly the next position nonce"
     },
     {
-      "code": 6024,
+      "code": 6030,
       "name": "positionMismatch",
       "msg": "Position belongs to a different basket or user"
     },
     {
-      "code": 6025,
-      "name": "basketDepositLimitExceeded",
-      "msg": "This deposit would exceed the 10,000 USDC basket cap"
-    },
-    {
-      "code": 6026,
-      "name": "userDepositLimitExceeded",
-      "msg": "This deposit would exceed the 500 USDC per-user basket cap"
-    },
-    {
-      "code": 6027,
+      "code": 6031,
       "name": "insufficientShares",
       "msg": "Insufficient shares"
     },
     {
-      "code": 6028,
+      "code": 6032,
       "name": "sharePriceAlreadyInitialized",
       "msg": "The initial $1 share price has already been consumed"
     },
     {
-      "code": 6029,
+      "code": 6033,
       "name": "compositionVersionMismatch",
       "msg": "Completion uses a stale composition version"
     },
     {
-      "code": 6030,
+      "code": 6034,
       "name": "feeMismatch",
       "msg": "Protocol fee does not match basket rules"
     },
     {
-      "code": 6031,
+      "code": 6035,
       "name": "slippageExceeded",
       "msg": "Settlement result exceeds the protocol or user slippage limit"
     },
     {
-      "code": 6032,
+      "code": 6036,
       "name": "invalidMinimumOutput",
       "msg": "Minimum output does not enforce the requested slippage tolerance"
     },
     {
-      "code": 6033,
+      "code": 6037,
       "name": "invalidSettlementValues",
       "msg": "Settlement values are internally inconsistent"
     },
     {
-      "code": 6034,
+      "code": 6038,
       "name": "shareArithmeticMismatch",
       "msg": "Credited shares do not match net value and share price"
     },
     {
-      "code": 6035,
+      "code": 6039,
       "name": "sharePriceMismatch",
       "msg": "Share price does not match the supplied basket NAV and outstanding shares"
     },
     {
-      "code": 6036,
+      "code": 6040,
       "name": "settlementNonceNotIncreasing",
       "msg": "Settlement nonce must increase for every basket completion"
     },
     {
-      "code": 6037,
+      "code": 6041,
       "name": "compositionNonceNotIncreasing",
       "msg": "Composition nonce must increase for every basket composition"
     },
     {
-      "code": 6038,
+      "code": 6042,
       "name": "finalSnapshotMismatch",
       "msg": "Final settlement snapshot does not match outstanding shares"
     },
     {
-      "code": 6039,
+      "code": 6043,
       "name": "creatorFeeMismatch",
       "msg": "Creator performance fee does not match realized profit"
     },
     {
-      "code": 6040,
+      "code": 6044,
       "name": "managementFeeCatchUpTooLarge",
       "msg": "Management-fee catch-up exceeds the supported safety bound"
     },
     {
-      "code": 6041,
+      "code": 6045,
       "name": "invalidExecutionVersion",
       "msg": "Execution batch uses an unsupported encoding version"
     },
     {
-      "code": 6042,
+      "code": 6046,
       "name": "invalidExecutionTimestamp",
       "msg": "Execution timestamp must be a valid past or current Unix timestamp"
     },
     {
-      "code": 6043,
+      "code": 6047,
       "name": "insufficientProtocolFeeShares",
       "msg": "Requested protocol fee shares exceed the accrued balance"
     },
     {
-      "code": 6044,
+      "code": 6048,
       "name": "mathOverflow",
       "msg": "Arithmetic overflow or underflow"
     }
@@ -1732,6 +2418,67 @@ export type PolybasketsEscrow = {
           {
             "name": "pendingAdmin",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "allowedToken",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jupiterVerified",
+            "type": "bool"
+          },
+          {
+            "name": "assetClass",
+            "type": {
+              "defined": {
+                "name": "tokenAssetClass"
+              }
+            }
+          },
+          {
+            "name": "availability",
+            "type": {
+              "defined": {
+                "name": "tradingAvailability"
+              }
+            }
+          },
+          {
+            "name": "priceSource",
+            "type": {
+              "defined": {
+                "name": "spotPriceSource"
+              }
+            }
+          },
+          {
+            "name": "backingAttestationHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "type": "i64"
           }
         ]
       }
@@ -2307,6 +3054,109 @@ export type PolybasketsEscrow = {
       }
     },
     {
+      "name": "compositionDraft",
+      "docs": [
+        "Composer-published creator selection. Splitting variable-size items into a",
+        "prior transaction keeps create/reconstitution transactions under Solana's",
+        "packet limit without weakening Ed25519 authorization."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "compositionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityNonce",
+            "type": "u64"
+          },
+          {
+            "name": "compositionNonce",
+            "type": "u64"
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "publishedAt",
+            "type": "i64"
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "basketAsset"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "compositionDraftPublished",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "compositionDraft",
+            "type": "pubkey"
+          },
+          {
+            "name": "compositionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityNonce",
+            "type": "u64"
+          },
+          {
+            "name": "compositionNonce",
+            "type": "u64"
+          },
+          {
+            "name": "itemCount",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
       "name": "config",
       "docs": [
         "Singleton protocol configuration and authority registry."
@@ -2410,14 +3260,17 @@ export type PolybasketsEscrow = {
             }
           },
           {
-            "name": "items",
+            "name": "eligibilityHash",
             "type": {
-              "vec": {
-                "defined": {
-                  "name": "basketAsset"
-                }
-              }
+              "array": [
+                "u8",
+                32
+              ]
             }
+          },
+          {
+            "name": "eligibilityNonce",
+            "type": "u64"
           },
           {
             "name": "creator",
@@ -2506,6 +3359,118 @@ export type PolybasketsEscrow = {
           {
             "name": "protocolFee",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "eligibilityList",
+      "docs": [
+        "Short-lived Composer-published market list used by basket creation/reconstitution."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "publishedAt",
+            "type": "i64"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "eligibleMarket"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "eligibilityListPublished",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "eligibilityList",
+            "type": "pubkey"
+          },
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "marketCount",
+            "type": "u16"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "eligibleMarket",
+      "docs": [
+        "One prediction market admitted by the Composer's unchanged six-point screen.",
+        "Weights are deliberately absent: creators choose them after eligibility is signed."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "ctfTokenId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -2739,6 +3704,124 @@ export type PolybasketsEscrow = {
                 }
               }
             ]
+          },
+          {
+            "name": "spot",
+            "fields": [
+              {
+                "name": "tokenMint",
+                "type": "pubkey"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "priceAttestation",
+      "docs": [
+        "Latest Composer-signed TWAP fallback for a token without a robust oracle."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "priceValue",
+            "docs": [
+              "Six-decimal settlement-value price, matching the accounting engine."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "confidenceBps",
+            "type": "u16"
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "validUntil",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "attestationHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "priceAttestationSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "priceAttestation",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "priceValue",
+            "type": "u64"
+          },
+          {
+            "name": "confidenceBps",
+            "type": "u16"
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "validUntil",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "attestationHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -2785,6 +3868,85 @@ export type PolybasketsEscrow = {
       }
     },
     {
+      "name": "publishCompositionDraftArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "compositionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eligibilityNonce",
+            "type": "u64"
+          },
+          {
+            "name": "compositionNonce",
+            "type": "u64"
+          },
+          {
+            "name": "items",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "basketAsset"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "publishEligibilityListArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "eligibleMarket"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "reconstitutionArgs",
       "docs": [
         "Composer-authorized replacement composition."
@@ -2802,14 +3964,17 @@ export type PolybasketsEscrow = {
             }
           },
           {
-            "name": "items",
+            "name": "eligibilityHash",
             "type": {
-              "vec": {
-                "defined": {
-                  "name": "basketAsset"
-                }
-              }
+              "array": [
+                "u8",
+                32
+              ]
             }
+          },
+          {
+            "name": "eligibilityNonce",
+            "type": "u64"
           },
           {
             "name": "compositionNonce",
@@ -2818,6 +3983,59 @@ export type PolybasketsEscrow = {
           {
             "name": "compositionExpiry",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registerTokenArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jupiterVerified",
+            "type": "bool"
+          },
+          {
+            "name": "assetClass",
+            "type": {
+              "defined": {
+                "name": "tokenAssetClass"
+              }
+            }
+          },
+          {
+            "name": "availability",
+            "type": {
+              "defined": {
+                "name": "tradingAvailability"
+              }
+            }
+          },
+          {
+            "name": "priceSource",
+            "type": {
+              "defined": {
+                "name": "spotPriceSource"
+              }
+            }
+          },
+          {
+            "name": "backingAttestationHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
           }
         ]
       }
@@ -2972,6 +4190,170 @@ export type PolybasketsEscrow = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "spotPriceSource",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "pyth",
+            "fields": [
+              {
+                "name": "feedId",
+                "type": {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "switchboard",
+            "fields": [
+              {
+                "name": "feed",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "signedTwap"
+          }
+        ]
+      }
+    },
+    {
+      "name": "submitPriceAttestationArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "priceValue",
+            "type": "u64"
+          },
+          {
+            "name": "confidenceBps",
+            "type": "u16"
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "validUntil",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenAllowlist",
+      "docs": [
+        "Admin-maintained spot-token registry. Disabling an entry blocks new",
+        "compositions but never changes or liquidates an existing basket."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "registeredBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokens",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "allowedToken"
+                }
+              }
+            }
+          },
+          {
+            "name": "updatedAt",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenAllowlistUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "tokenAllowlist",
+            "type": "pubkey"
+          },
+          {
+            "name": "tokenMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "jupiterVerified",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tokenAssetClass",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "crypto"
+          },
+          {
+            "name": "tokenizedEquity"
+          },
+          {
+            "name": "other"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tradingAvailability",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "twentyFourSeven"
+          },
+          {
+            "name": "twentyFourFive"
           }
         ]
       }

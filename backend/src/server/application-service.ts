@@ -7,7 +7,9 @@ import {
   BasketCreationOrchestrator,
   type ComposerCandidate,
   type ComposerPolicy,
+  type SpotCompositionSelection,
 } from "../composer/index.js";
+import type { JupiterTokenAssetClass } from "../jupiter/index.js";
 import { executionRequestHash } from "../execution/hashes.js";
 import type { ExecutionKind, ExecutionState } from "../execution/types.js";
 import {
@@ -146,6 +148,13 @@ const policySchema = z.object({
   minVolume24hPusdUnits: canonicalUnsigned,
 }).strict();
 
+const creatorMarketWeightSchema = z.object({
+  marketId: z.string().min(1).max(64),
+  tokenId: z.string().regex(/^(?:0|[1-9][0-9]*)$/u),
+  outcomeIndex: z.union([z.literal(0), z.literal(1)]),
+  weightBps: z.number().int().min(1).max(3_000),
+}).strict();
+
 const createBasketSchema = z.object({
   basketId: hex32,
   creator: publicKey,
@@ -153,9 +162,17 @@ const createBasketSchema = z.object({
   isPerpetual: z.boolean(),
   reconstitutionCadenceSecs: canonicalUnsigned,
   compositionNonce: positiveUnsigned,
+  eligibilityNonce: positiveUnsigned,
   compositionExpiry: positiveUnsigned,
   performanceFeeBps: z.number().int().min(0).max(2_000).optional(),
-  candidates: z.array(candidateSchema).min(1).max(64),
+  candidates: z.array(candidateSchema).max(64).default([]),
+  creatorWeights: z.array(creatorMarketWeightSchema).max(16).default([]),
+  spotSelections: z.array(z.object({
+    marketId: z.string().min(1).max(64),
+    tokenMint: publicKey,
+    assetClass: z.enum(["crypto", "tokenized-equity", "other"]),
+    weightBps: z.number().int().min(1).max(3_000),
+  }).strict()).max(16).default([]),
   policy: policySchema,
 }).strict();
 
@@ -248,6 +265,10 @@ export interface QuoteContext {
   readonly sharesOwned: bigint;
   readonly costBasisValue: bigint;
   readonly weightedDepositTimestamp: bigint;
+  readonly executionAssets?: readonly Readonly<{
+    readonly kind: "prediction_market" | "spot";
+    readonly weightBps: number;
+  }>[];
 }
 
 export interface QuoteContextPort {
@@ -270,6 +291,15 @@ export interface ExecutionWalletRoutePort {
 
 export interface DepositFundingRoutePort {
   createDepositFundingAddress(polymarketWallet: string): Promise<string>;
+}
+
+export interface SpotCompositionAdmissionPort {
+  admit(request: {
+    readonly marketId: string;
+    readonly tokenMint: PublicKey;
+    readonly assetClass: JupiterTokenAssetClass;
+    readonly weightBps: number;
+  }): Promise<SpotCompositionSelection>;
 }
 
 export interface PersistedApiOperation {
@@ -320,10 +350,12 @@ export interface FinancialRequestStorePort {
     readonly basketId: string;
     readonly compositionHash: string;
     readonly items: readonly Readonly<{
+      readonly assetKind?: "prediction_market" | "spot";
       readonly marketId: string;
-      readonly conditionId: string;
+      readonly conditionId?: string;
       readonly tokenId: string;
       readonly outcome: string;
+      readonly tokenDecimals?: number;
       readonly initialMarkPriceUnits: bigint;
       readonly markObservedAtMs: bigint;
       readonly markSourceHash: string;
@@ -360,6 +392,10 @@ export class AlphaBasketApiService implements FinancialApiPort {
     private readonly walletRoutes: ExecutionWalletRoutePort,
     private readonly fundingRoutes: DepositFundingRoutePort,
     private readonly basketCreation: BasketCreationOrchestrator,
+    private readonly options: Readonly<{
+      spotFundingDestination?: string;
+      spotAdmission?: SpotCompositionAdmissionPort;
+    }> = {},
   ) {}
 
   public async createDepositQuote(input: unknown): Promise<ApiJsonObject> {
@@ -447,15 +483,67 @@ export class AlphaBasketApiService implements FinancialApiPort {
       authoritative.user,
       authoritative.navReportHash,
     );
+    const targetAmounts = (context.executionAssets ?? [{
+      kind: "prediction_market" as const,
+      weightBps: 10_000,
+    }]).map((asset) => Object.freeze({
+      ...asset,
+      amount: (authoritative.quotedNetValue * BigInt(asset.weightBps)) / 10_000n,
+    }));
+    const predictionAmount = targetAmounts.reduce(
+      (sum, target) => target.kind === "prediction_market" ? sum + target.amount : sum,
+      0n,
+    );
+    const spotAmount = authoritative.quotedNetValue - predictionAmount;
+    if (spotAmount > 0n && this.options.spotFundingDestination === undefined) {
+      throw new ApiRequestError(
+        503,
+        "spot_execution_unavailable",
+        "spot basket funding requires a configured Solana mainnet execution wallet",
+      );
+    }
+    const transfers: ApiJsonValue[] = [];
+    if (predictionAmount > 0n) {
+      transfers.push({
+        purpose: "polymarket_allocation",
+        destination: operation.fundingAddress,
+        amount: predictionAmount.toString(10),
+      });
+    }
+    if (spotAmount > 0n) {
+      transfers.push({
+        purpose: "jupiter_allocation",
+        destination: this.options.spotFundingDestination as string,
+        amount: spotAmount.toString(10),
+      });
+    }
+    if (authoritative.protocolFee > 0n) {
+      transfers.push({
+        purpose: "protocol_deposit_fee",
+        destination: context.protocolFeeDestination.toBase58(),
+        amount: authoritative.protocolFee.toString(10),
+      });
+    }
     return {
       ...operationJson(operation),
       funding: {
         transactionMustBeSignedBy: authoritative.user.toBase58(),
         settlementMint: context.settlementMint.toBase58(),
         netAmount: authoritative.quotedNetValue.toString(10),
-        netDestination: operation.fundingAddress,
+        netDestination: predictionAmount === authoritative.quotedNetValue
+          ? operation.fundingAddress
+          : null,
+        predictionMarketAmount: predictionAmount.toString(10),
+        predictionMarketDestination: predictionAmount === 0n
+          ? null
+          : operation.fundingAddress,
+        jupiterAmount: spotAmount.toString(10),
+        jupiterDestination: spotAmount === 0n
+          ? null
+          : this.options.spotFundingDestination as string,
         protocolFeeAmount: authoritative.protocolFee.toString(10),
         protocolFeeDestination: context.protocolFeeDestination.toBase58(),
+        transfers,
       },
     };
   }
@@ -527,6 +615,18 @@ export class AlphaBasketApiService implements FinancialApiPort {
 
   public async createBasket(input: unknown): Promise<ApiJsonObject> {
     const request = parse(createBasketSchema, input);
+    if (request.spotSelections.length > 0 && this.options.spotAdmission === undefined) {
+      throw new ApiRequestError(
+        503,
+        "spot_composer_unavailable",
+        "Jupiter spot admission is not enabled",
+      );
+    }
+    const spotSelections = await Promise.all(
+      request.spotSelections.map((selection) =>
+        (this.options.spotAdmission as SpotCompositionAdmissionPort).admit(selection),
+      ),
+    );
     const result = await this.basketCreation.composeSignAndCreate({
       basketId: Buffer.from(request.basketId, "hex"),
       creator: request.creator,
@@ -534,9 +634,12 @@ export class AlphaBasketApiService implements FinancialApiPort {
       isPerpetual: request.isPerpetual,
       reconstitutionCadenceSecs: request.reconstitutionCadenceSecs,
       compositionNonce: request.compositionNonce,
+      eligibilityNonce: request.eligibilityNonce,
       compositionExpiry: request.compositionExpiry,
       ...(request.performanceFeeBps === undefined ? {} : { performanceFeeBps: request.performanceFeeBps }),
       candidates: request.candidates as readonly ComposerCandidate[],
+      creatorWeights: request.creatorWeights,
+      spotSelections,
       policy: request.policy as ComposerPolicy,
     });
     await this.requests.initializeBasketPortfolio({

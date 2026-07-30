@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { ALPHABASKET_PROGRAM_ID } from "./constants.js";
 import {
   bytes32,
+  encodeU64LE,
   nonZeroBytes32,
   nonZeroPublicKeyBytes,
   publicKeyBytes,
@@ -25,6 +26,58 @@ export function deriveBasketPda(
 ): DerivedPda {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("basket", "ascii"), bytes32(basketId, "basketId")],
+    programId,
+  );
+}
+
+export function deriveEligibilityListPda(
+  listHash: Uint8Array,
+  nonce: bigint,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("eligibility", "ascii"),
+      nonZeroBytes32(listHash, "listHash"),
+      encodeU64LE(nonce, "nonce"),
+    ],
+    programId,
+  );
+}
+
+export function deriveCompositionDraftPda(
+  compositionHash: Uint8Array,
+  compositionNonce: bigint,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("composition_draft", "ascii"),
+      nonZeroBytes32(compositionHash, "compositionHash"),
+      encodeU64LE(compositionNonce, "compositionNonce"),
+    ],
+    programId,
+  );
+}
+
+export function deriveTokenAllowlistPda(
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("token_allowlist", "ascii")],
+    programId,
+  );
+}
+
+export function derivePriceAttestationPda(
+  tokenMint: PublicKey,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("price_attestation", "ascii"),
+      nonZeroPublicKeyBytes(tokenMint, "tokenMint"),
+    ],
     programId,
   );
 }
@@ -56,4 +109,3 @@ export function deriveReceiptPda(
     programId,
   );
 }
-

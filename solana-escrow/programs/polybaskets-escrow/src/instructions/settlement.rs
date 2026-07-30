@@ -7,9 +7,8 @@ use sha2::{Digest, Sha256};
 use crate::constants::{
     DEPOSIT_FEE_BPS, DEPOSIT_INTENT_DOMAIN, EARLY_WITHDRAWAL_FEE_BPS, ED25519_ID,
     EXECUTION_BATCH_VERSION, MANAGEMENT_FEE_PERIOD_SECS, MATURE_HOLDING_PERIOD_SECS,
-    MATURE_WITHDRAWAL_FEE_BPS, MAX_BASKET_DEPOSIT_UNITS, MAX_MANAGEMENT_FEE_PERIODS,
-    MAX_USER_DEPOSIT_UNITS, POSITION_RESERVED_BYTES, RECONSTITUTION_DOMAIN, SHARE_SCALE,
-    WITHDRAWAL_INTENT_DOMAIN,
+    MATURE_WITHDRAWAL_FEE_BPS, MAX_MANAGEMENT_FEE_PERIODS, POSITION_RESERVED_BYTES,
+    RECONSTITUTION_DOMAIN, SHARE_SCALE, WITHDRAWAL_INTENT_DOMAIN,
 };
 use crate::errors::EscrowError;
 use crate::events::{
@@ -25,8 +24,8 @@ use crate::math::{
 };
 use crate::state::{
     Basket, BasketStatus, CompleteDepositArgs, CompleteProtocolFeeWithdrawalArgs,
-    CompleteWithdrawalArgs, Config, FinalSettlementArgs, Position, ReconstitutionArgs,
-    SettlementAction, SettlementReceipt, WithdrawalKind,
+    CompleteWithdrawalArgs, CompositionDraft, Config, EligibilityList, FinalSettlementArgs,
+    Position, ReconstitutionArgs, SettlementAction, SettlementReceipt, WithdrawalKind,
 };
 
 #[derive(Accounts)]
@@ -163,6 +162,7 @@ pub struct BackendBasketAction<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(args: ReconstitutionArgs)]
 pub struct CompleteReconstitution<'info> {
     #[account(
         seeds = [b"config"],
@@ -177,6 +177,26 @@ pub struct CompleteReconstitution<'info> {
         bump = basket.bump,
     )]
     pub basket: Account<'info, Basket>,
+    #[account(
+        seeds = [
+            b"composition_draft",
+            args.composition_hash.as_ref(),
+            args.composition_nonce.to_le_bytes().as_ref(),
+        ],
+        bump = composition_draft.bump,
+        constraint = composition_draft.composer == composer_signer.key() @ EscrowError::UnauthorizedCompositionSigner,
+    )]
+    pub composition_draft: Account<'info, CompositionDraft>,
+    #[account(
+        seeds = [
+            b"eligibility",
+            args.eligibility_hash.as_ref(),
+            args.eligibility_nonce.to_le_bytes().as_ref(),
+        ],
+        bump = eligibility_list.bump,
+        constraint = eligibility_list.composer == composer_signer.key() @ EscrowError::UnauthorizedCompositionSigner,
+    )]
+    pub eligibility_list: Account<'info, EligibilityList>,
     pub backend_signer: Signer<'info>,
     pub composer_signer: Signer<'info>,
     /// CHECK: constrained to the native instructions sysvar.
@@ -371,29 +391,21 @@ pub fn complete_deposit_handler(
         EscrowError::SlippageExceeded
     );
 
-    let new_basket_deposited = ctx
+    let new_basket_gross_deposited = ctx
         .accounts
         .basket
         .gross_deposited_value
         .checked_add(args.gross_amount)
         .ok_or(EscrowError::MathOverflow)?;
-    require!(
-        new_basket_deposited <= MAX_BASKET_DEPOSIT_UNITS,
-        EscrowError::BasketDepositLimitExceeded
-    );
-    let new_user_deposited = ctx
+    let new_user_gross_deposited = ctx
         .accounts
         .position
         .gross_deposited_value
         .checked_add(args.gross_amount)
         .ok_or(EscrowError::MathOverflow)?;
-    require!(
-        new_user_deposited <= MAX_USER_DEPOSIT_UNITS,
-        EscrowError::UserDepositLimitExceeded
-    );
 
     let basket = &mut ctx.accounts.basket;
-    basket.gross_deposited_value = new_basket_deposited;
+    basket.gross_deposited_value = new_basket_gross_deposited;
     basket.total_shares_outstanding = basket
         .total_shares_outstanding
         .checked_add(args.shares_credited)
@@ -412,7 +424,7 @@ pub fn complete_deposit_handler(
         args.net_deposit_value,
         now,
     )?;
-    position.gross_deposited_value = new_user_deposited;
+    position.gross_deposited_value = new_user_gross_deposited;
     position.shares_owned = position
         .shares_owned
         .checked_add(args.shares_credited)
@@ -870,7 +882,25 @@ pub fn complete_reconstitution_handler(
     let now = Clock::get()?.unix_timestamp;
     accrue_management_fee_internal(&mut ctx.accounts.basket, now)?;
     require!(args.composition_hash != [0u8; 32], EscrowError::ZeroHash);
-    validate_basket_items(&args.items)?;
+    require!(
+        ctx.accounts.eligibility_list.list_hash == args.eligibility_hash
+            && ctx.accounts.eligibility_list.nonce == args.eligibility_nonce
+            && ctx.accounts.eligibility_list.published_at <= now
+            && ctx.accounts.eligibility_list.expires_at > now,
+        EscrowError::InvalidEligibilityList
+    );
+    require!(
+        ctx.accounts.composition_draft.composition_hash == args.composition_hash
+            && ctx.accounts.composition_draft.eligibility_hash == args.eligibility_hash
+            && ctx.accounts.composition_draft.eligibility_nonce == args.eligibility_nonce
+            && ctx.accounts.composition_draft.composition_nonce == args.composition_nonce,
+        EscrowError::CompositionHashMismatch
+    );
+    validate_basket_items(
+        &ctx.accounts.composition_draft.items,
+        &ctx.accounts.eligibility_list,
+        ctx.remaining_accounts,
+    )?;
     require!(
         args.composition_expiry > now,
         EscrowError::CompositionAuthorizationExpired
@@ -879,7 +909,7 @@ pub fn complete_reconstitution_handler(
         args.composition_nonce > ctx.accounts.basket.last_composition_nonce,
         EscrowError::CompositionNonceNotIncreasing
     );
-    let composition = canonical_composition_bytes(&args.items)?;
+    let composition = canonical_composition_bytes(&ctx.accounts.composition_draft.items)?;
     require!(
         Sha256::digest(&composition).as_slice() == args.composition_hash,
         EscrowError::CompositionHashMismatch
@@ -895,7 +925,8 @@ pub fn complete_reconstitution_handler(
     message.extend_from_slice(crate::ID.as_ref());
     message.extend_from_slice(&ctx.accounts.basket.basket_id);
     message.extend_from_slice(&next_version.to_le_bytes());
-    message.extend_from_slice(&args.composition_hash);
+    message.extend_from_slice(&args.eligibility_hash);
+    message.extend_from_slice(&args.eligibility_nonce.to_le_bytes());
     message.extend_from_slice(&args.composition_nonce.to_le_bytes());
     message.extend_from_slice(&args.composition_expiry.to_le_bytes());
     verify_composer_signature(
@@ -908,7 +939,7 @@ pub fn complete_reconstitution_handler(
     basket.composition_hash = args.composition_hash;
     basket.composition_version = next_version;
     basket.last_composition_nonce = args.composition_nonce;
-    basket.items = args.items;
+    basket.items = ctx.accounts.composition_draft.items.clone();
     basket.status = BasketStatus::Active;
     basket.last_reconstitution_at = now;
     basket.updated_at = now;

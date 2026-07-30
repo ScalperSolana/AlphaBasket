@@ -12,6 +12,7 @@ import type { PolybasketsEscrow } from "../src/contract/generated/polybaskets_es
 import {
   ALPHABASKET_PROGRAM_ID,
   compositionHash,
+  eligibilityHash,
   reconstitutionAuthorizationMessage,
   type BasketAsset,
 } from "../src/contract/index.js";
@@ -27,10 +28,19 @@ const basketAddress = new PublicKey(new Uint8Array(32).fill(23));
 const lifecycleProgram = new PublicKey(new Uint8Array(32).fill(24));
 
 const assets: readonly BasketAsset[] = Object.freeze([
-  { marketId: "market-a", kind: { predictionMarket: { outcome: 1, ctfTokenId: new Uint8Array(32).fill(1) } }, weightBps: 4_000 },
+  { marketId: "market-a", kind: { predictionMarket: { outcome: 1, ctfTokenId: new Uint8Array(32).fill(1) } }, weightBps: 3_000 },
   { marketId: "market-b", kind: { predictionMarket: { outcome: 0, ctfTokenId: new Uint8Array(32).fill(2) } }, weightBps: 3_000 },
-  { marketId: "market-c", kind: { predictionMarket: { outcome: 1, ctfTokenId: new Uint8Array(32).fill(3) } }, weightBps: 3_000 },
+  { marketId: "market-c", kind: { predictionMarket: { outcome: 1, ctfTokenId: new Uint8Array(32).fill(3) } }, weightBps: 2_000 },
+  { marketId: "market-d", kind: { predictionMarket: { outcome: 0, ctfTokenId: new Uint8Array(32).fill(4) } }, weightBps: 2_000 },
 ]);
+const eligibleMarkets = assets.map((asset) => {
+  if (!("predictionMarket" in asset.kind)) throw new Error("fixture must be prediction");
+  return {
+    marketId: asset.marketId,
+    outcome: asset.kind.predictionMarket.outcome,
+    ctfTokenId: asset.kind.predictionMarket.ctfTokenId,
+  };
+});
 
 function basket(totalSharesOutstanding = 100n): LifecycleBasket {
   return Object.freeze({
@@ -58,6 +68,11 @@ function fakeProgram(): Program<PolybasketsEscrow> {
   });
   return {
     programId: ALPHABASKET_PROGRAM_ID,
+    provider: {
+      connection: {
+        getAccountInfo: async () => ({ owner: ALPHABASKET_PROGRAM_ID }),
+      },
+    },
     methods: {
       accrueManagementFee: () => builder("accrue"),
       beginReconstitution: () => builder("begin-reconstitution"),
@@ -71,10 +86,12 @@ function fakeProgram(): Program<PolybasketsEscrow> {
 function signedReconstitution() {
   const current = basket();
   const hash = compositionHash(assets);
+  const eligibleHash = eligibilityHash(eligibleMarkets);
   const message = reconstitutionAuthorizationMessage({
     basketId: current.basketId,
     nextCompositionVersion: 2,
-    compositionHash: hash,
+    eligibilityHash: eligibleHash,
+    eligibilityNonce: 1n,
     compositionNonce: 5n,
     compositionExpiry: 4_102_444_800n,
   });
@@ -83,6 +100,9 @@ function signedReconstitution() {
     basketId: current.basketId,
     nextCompositionVersion: 2,
     compositionHash: Uint8Array.from(hash),
+    eligibilityHash: Uint8Array.from(eligibleHash),
+    eligibilityNonce: 1n,
+    eligibleMarkets,
     items: assets,
     compositionNonce: 5n,
     compositionExpirySeconds: 4_102_444_800n,

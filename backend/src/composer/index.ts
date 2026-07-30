@@ -4,5 +4,4 @@ export * from "./candidate-builder.js";
 export * from "./composition-service.js";
 export * from "./filters.js";
 export * from "./types.js";
-export * from "./weighting.js";
 export * from "./polymarket-source.js";

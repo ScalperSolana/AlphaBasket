@@ -4,8 +4,9 @@ import { PublicKey } from "@solana/web3.js";
 
 import { encodeI64LE, encodeU8, encodeU32LE, encodeU64LE } from "../contract/index.js";
 import type { FakOrderResult } from "./types.js";
+import type { JupiterExactInResult } from "../jupiter/index.js";
 
-const EXECUTION_ATTESTATION_DOMAIN = Buffer.from("ALPHABASKET_EXECUTION_V1", "ascii");
+const EXECUTION_ATTESTATION_DOMAIN = Buffer.from("ALPHABASKET_EXECUTION_V2", "ascii");
 
 function encodeText(value: string, name: string): Buffer {
   const bytes = Buffer.from(value, "utf8");
@@ -32,7 +33,9 @@ export interface ExecutionAttestationInput {
   readonly bridgeSourceTxHash?: string;
   readonly bridgeDestinationTxHash?: string;
   readonly idlePusdUnits: bigint;
+  readonly idleUsdcUnits?: bigint;
   readonly orders: readonly FakOrderResult[];
+  readonly jupiterSwaps?: readonly JupiterExactInResult[];
 }
 
 /** Versioned, length-prefixed execution record committed by the on-chain receipt hash. */
@@ -43,6 +46,10 @@ export function executionAttestationBytes(input: ExecutionAttestationInput): Buf
     left.clientOrderId.localeCompare(right.clientOrderId, "en"),
   );
   if (ordered.length > 64) throw new RangeError("execution attestation cannot exceed 64 orders");
+  const swaps = [...(input.jupiterSwaps ?? [])].sort((left, right) =>
+    left.idempotencyKey.localeCompare(right.idempotencyKey, "en"),
+  );
+  if (swaps.length > 64) throw new RangeError("execution attestation cannot exceed 64 Jupiter swaps");
   const encodedOrders = ordered.map((order, index) =>
     Buffer.concat([
       encodeText(order.clientOrderId, `orders[${index}].clientOrderId`),
@@ -56,6 +63,19 @@ export function executionAttestationBytes(input: ExecutionAttestationInput): Buf
       encodeI64LE(order.executedAtMs / 1_000n, `orders[${index}].executedAt`),
     ]),
   );
+  const encodedSwaps = swaps.map((swap, index) =>
+    Buffer.concat([
+      encodeText(swap.idempotencyKey, `swaps[${index}].idempotencyKey`),
+      swap.inputMint.toBuffer(),
+      swap.outputMint.toBuffer(),
+      encodeU64LE(swap.requestedInputUnits, `swaps[${index}].requested`),
+      encodeU64LE(swap.filledInputUnits, `swaps[${index}].input`),
+      encodeU64LE(swap.filledOutputUnits, `swaps[${index}].output`),
+      encodeU64LE(swap.minimumOutputUnits, `swaps[${index}].minimumOutput`),
+      encodeText(swap.transactionSignature, `swaps[${index}].signature`),
+      encodeI64LE(swap.executedAtMs / 1_000n, `swaps[${index}].executedAt`),
+    ]),
+  );
   return Buffer.concat([
     EXECUTION_ATTESTATION_DOMAIN,
     encodeU8(kind, "kind"),
@@ -67,8 +87,11 @@ export function executionAttestationBytes(input: ExecutionAttestationInput): Buf
     encodeText(input.bridgeSourceTxHash ?? "none", "bridgeSourceTxHash"),
     encodeText(input.bridgeDestinationTxHash ?? "none", "bridgeDestinationTxHash"),
     encodeU64LE(input.idlePusdUnits, "idlePusdUnits"),
+    encodeU64LE(input.idleUsdcUnits ?? 0n, "idleUsdcUnits"),
     encodeU32LE(encodedOrders.length, "orderCount"),
     ...encodedOrders,
+    encodeU32LE(encodedSwaps.length, "swapCount"),
+    ...encodedSwaps,
   ]);
 }
 

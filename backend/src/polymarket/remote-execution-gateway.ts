@@ -159,7 +159,10 @@ export class HttpSolanaAtomicSplit
 {
   public async distribute(request: {
     readonly idempotencyKey: string;
-    readonly sourceBridgeTransaction: string;
+    readonly sourceBridgeTransaction: string | null;
+    readonly sourceBridgeAmountUnits?: bigint;
+    readonly sourceJupiterTransactions?: readonly string[];
+    readonly idleUsdcAmountUnits?: bigint;
     readonly mint: string;
     readonly userDestination: string;
     readonly creatorDestination: string;
@@ -180,7 +183,10 @@ export class HttpSolanaAtomicSplit
       "ALPHABASKET_REMOTE_SOLANA_SPLIT_V1",
       this.options.deploymentMode,
       request.idempotencyKey,
-      request.sourceBridgeTransaction,
+      request.sourceBridgeTransaction ?? "none",
+      (request.sourceBridgeAmountUnits ?? 0n).toString(10),
+      [...(request.sourceJupiterTransactions ?? [])].sort(),
+      (request.idleUsdcAmountUnits ?? 0n).toString(10),
       request.mint,
       request.userDestination,
       request.creatorDestination,
@@ -193,6 +199,8 @@ export class HttpSolanaAtomicSplit
         requestHash,
         deploymentMode: this.options.deploymentMode,
         ...request,
+        sourceBridgeAmountUnits: request.sourceBridgeAmountUnits?.toString(10),
+        idleUsdcAmountUnits: request.idleUsdcAmountUnits?.toString(10),
         userAmountUnits: request.userAmountUnits.toString(10),
         creatorAmountUnits: request.creatorAmountUnits.toString(10),
         protocolAmountUnits: request.protocolAmountUnits.toString(10),

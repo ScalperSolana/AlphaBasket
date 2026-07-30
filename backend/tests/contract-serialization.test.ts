@@ -6,6 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 import {
   ALPHABASKET_PROGRAM_ID,
   canonicalCompositionBytes,
+  canonicalEligibilityBytes,
   compositionHash,
   createCompositionAuthorizationMessage,
   depositIntentHash,
@@ -16,6 +17,7 @@ import {
   deriveReceiptPda,
   encodeI64LE,
   encodeU64LE,
+  eligibilityHash,
   receiptExecutionHash,
   reconstitutionAuthorizationMessage,
   sha256,
@@ -36,30 +38,47 @@ const items: readonly BasketAsset[] = [
   {
     marketId: "market-a",
     kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes(1) } },
-    weightBps: 4_000,
+    weightBps: 3_000,
   },
   {
     marketId: "market-b",
     kind: { predictionMarket: { outcome: 0, ctfTokenId: bytes(2) } },
-    weightBps: 3_500,
+    weightBps: 3_000,
   },
   {
     marketId: "market-c",
     kind: { predictionMarket: { outcome: 1, ctfTokenId: bytes(3) } },
-    weightBps: 2_500,
+    weightBps: 2_000,
+  },
+  {
+    marketId: "market-d",
+    kind: { predictionMarket: { outcome: 0, ctfTokenId: bytes(4) } },
+    weightBps: 2_000,
   },
 ];
+const eligibleMarkets = items.map((item) => {
+  if (!("predictionMarket" in item.kind)) throw new Error("test fixture must be prediction");
+  return {
+    marketId: item.marketId,
+    outcome: item.kind.predictionMarket.outcome,
+    ctfTokenId: item.kind.predictionMarket.ctfTokenId,
+  };
+});
 
 // These vectors use the exact field order and little-endian writes in the
 // program's Rust `canonical_composition_bytes` and message builders.
 const CANONICAL_COMPOSITION_HEX =
-  "030008006d61726b65742d6100010101010101010101010101010101010101010101010101010101010101010101a00f08006d61726b65742d6200000202020202020202020202020202020202020202020202020202020202020202ac0d08006d61726b65742d6300010303030303030303030303030303030303030303030303030303030303030303c409";
+  "040008006d61726b65742d6100010101010101010101010101010101010101010101010101010101010101010101b80b08006d61726b65742d6200000202020202020202020202020202020202020202020202020202020202020202b80b08006d61726b65742d6300010303030303030303030303030303030303030303030303030303030303030303d00708006d61726b65742d6400000404040404040404040404040404040404040404040404040404040404040404d007";
 const COMPOSITION_HASH_HEX =
-  "e297c66306fb0f1f2857268329d5539af939ebe49637e6f3ad238c324294db42";
+  "a53b67dfa5a9a32e6665e532bbb5734e1109d11f48d64c0e3c65718e2ebf4a50";
+const CANONICAL_ELIGIBILITY_HEX =
+  "040008006d61726b65742d6101010101010101010101010101010101010101010101010101010101010101010108006d61726b65742d6200020202020202020202020202020202020202020202020202020202020202020208006d61726b65742d6301030303030303030303030303030303030303030303030303030303030303030308006d61726b65742d64000404040404040404040404040404040404040404040404040404040404040404";
+const ELIGIBILITY_HASH_HEX =
+  "f2025565617356e136e66c211b810922af32cea88a9e7d111a8543882d94eddf";
 const CREATE_MESSAGE_HEX =
-  "414c5048414241534b45545f434f4d504f534954494f4e5f563146f523ab30393190549ed6672104cb14dc8c38d69ef19d6323e05e919dac7486000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f11111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222e297c66306fb0f1f2857268329d5539af939ebe49637e6f3ad238c324294db42e80301008d2700000000000900000000000000005786f400000000";
+  "41425f4352454154455f563246f523ab30393190549ed6672104cb14dc8c38d69ef19d6323e05e919dac7486000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f11111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222f2025565617356e136e66c211b810922af32cea88a9e7d111a8543882d94eddf0800000000000000e80301008d2700000000000900000000000000005786f400000000";
 const RECONSTITUTION_MESSAGE_HEX =
-  "414c5048414241534b45545f5245434f4e535449545554494f4e5f563146f523ab30393190549ed6672104cb14dc8c38d69ef19d6323e05e919dac7486000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f04000000e297c66306fb0f1f2857268329d5539af939ebe49637e6f3ad238c324294db420a00000000000000c894357700000000";
+  "41425f5245434f4e5f563246f523ab30393190549ed6672104cb14dc8c38d69ef19d6323e05e919dac7486000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f04000000f2025565617356e136e66c211b810922af32cea88a9e7d111a8543882d94eddf08000000000000000a00000000000000c894357700000000";
 
 describe("contract composition serialization", () => {
   it("matches the Rust canonical composition and SHA-256 golden vector", () => {
@@ -68,15 +87,24 @@ describe("contract composition serialization", () => {
       CANONICAL_COMPOSITION_HEX,
     );
     assert.equal(compositionHash(items).toString("hex"), COMPOSITION_HASH_HEX);
+    assert.equal(
+      canonicalEligibilityBytes(eligibleMarkets).toString("hex"),
+      CANONICAL_ELIGIBILITY_HEX,
+    );
+    assert.equal(
+      eligibilityHash(eligibleMarkets).toString("hex"),
+      ELIGIBILITY_HASH_HEX,
+    );
   });
 
   it("matches the Rust create and reconstitution authorization preimages", () => {
-    const hash = compositionHash(items);
+    const hash = eligibilityHash(eligibleMarkets);
     const createMessage = createCompositionAuthorizationMessage({
       basketId,
       creator,
       creatorFeeDestination,
-      compositionHash: hash,
+      eligibilityHash: hash,
+      eligibilityNonce: 8n,
       performanceFeeBps: 1_000,
       isPerpetual: true,
       reconstitutionCadenceSecs: 2_592_000n,
@@ -86,20 +114,21 @@ describe("contract composition serialization", () => {
     assert.equal(createMessage.toString("hex"), CREATE_MESSAGE_HEX);
     assert.equal(
       sha256(createMessage).toString("hex"),
-      "521721a7bb3802606d49acdfb6ab5bb4d52899fc3ad2a8c041325c6353b03c61",
+      "71ab064e818b5daadb3c73f45cd2508c668c77fad40e2025f914f35d97e202a0",
     );
 
     const reconstitution = reconstitutionAuthorizationMessage({
       basketId,
       nextCompositionVersion: 4,
-      compositionHash: hash,
+      eligibilityHash: hash,
+      eligibilityNonce: 8n,
       compositionNonce: 10n,
       compositionExpiry: 2_000_000_200n,
     });
     assert.equal(reconstitution.toString("hex"), RECONSTITUTION_MESSAGE_HEX);
     assert.equal(
       sha256(reconstitution).toString("hex"),
-      "2a5a60412d993e728f29b0d524d90a7a154e3e67d5b175d403f9bd3e03ce88a3",
+      "396c9d86762f1ec904e64a8489c2687684032993ffd7ca0129d2157d60275a0d",
     );
   });
 
@@ -107,9 +136,10 @@ describe("contract composition serialization", () => {
     assert.throws(
       () =>
         canonicalCompositionBytes([
-          { ...items[0]!, weightBps: 4_001 },
+          { ...items[0]!, weightBps: 3_001 },
           items[1]!,
-          { ...items[2]!, weightBps: 2_499 },
+          items[2]!,
+          { ...items[3]!, weightBps: 1_999 },
         ]),
       /weightBps/,
     );

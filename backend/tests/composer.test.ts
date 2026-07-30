@@ -7,8 +7,6 @@ import {
   BasketCompositionService,
   BasketCreationOrchestrator,
   ContractCompositionMessageEncoder,
-  allocateCappedWeights,
-  allocateEventCappedWeights,
   ctfTokenIdDecimalToBytes,
   type ComposerCandidate,
   type ComposerPolicy,
@@ -18,7 +16,7 @@ import { compositionHash } from "../src/contract/index.js";
 
 const NOW_MS = 2_000_000_000_000n;
 const policy: ComposerPolicy = {
-  minMarkets: 3,
+  minMarkets: 4,
   maxMarkets: 8,
   minRemainingMs: 86_400_000n,
   maxRemainingMs: 365n * 86_400_000n,
@@ -26,6 +24,13 @@ const policy: ComposerPolicy = {
   minDepthPusdUnits: 1_000_000n,
   minVolume24hPusdUnits: 1_000_000n,
 };
+
+const creatorWeights = [0, 1, 2, 3].map((index) => ({
+  marketId: String(1_000 + index),
+  tokenId: String(10_000 + index),
+  outcomeIndex: (index % 2 === 0 ? 0 : 1) as 0 | 1,
+  weightBps: index < 2 ? 3_000 : 2_000,
+}));
 
 const candidate = (
   index: number,
@@ -54,15 +59,16 @@ const candidate = (
   dataCondition: "fresh",
 });
 
-describe("deterministic Composer", () => {
-  it("keeps every item positive, totals 10,000 bps and caps each event at 40%", () => {
+describe("deterministic Composer eligibility and creator weights", () => {
+  it("screens eligibility but preserves creator-assigned weights under the 30% cap", () => {
     const composition = new BasketCompositionService().compose(
       [
         candidate(0, "event-a", 10n ** 18n),
         candidate(1, "event-b", 10n ** 12n),
         candidate(2, "event-c", 10n ** 6n),
-        candidate(3, "event-d", 1n),
+        candidate(3, "event-d", 1_000_000n),
       ],
+      creatorWeights,
       policy,
       NOW_MS,
     );
@@ -71,50 +77,44 @@ describe("deterministic Composer", () => {
       10_000,
     );
     assert.equal(composition.items.every((item) => item.weightBps > 0), true);
-    const byEvent = new Map<string, number>();
-    for (const item of composition.items) {
-      assert.notEqual(item.eventId, null);
-      byEvent.set(
-        item.eventId ?? "",
-        (byEvent.get(item.eventId ?? "") ?? 0) + item.weightBps,
-      );
-    }
-    assert.equal([...byEvent.values()].every((weight) => weight <= 4_000), true);
+    assert.deepEqual(
+      composition.items.map((item) => item.weightBps),
+      [3_000, 3_000, 2_000, 2_000],
+    );
+    assert.equal(composition.eligibleMarkets.length, 4);
     assert.equal(
       composition.hash,
       compositionHash(composition.assets).toString("hex"),
     );
   });
 
-  it("does not emit zero weights for extreme score ratios", () => {
-    const weights = allocateCappedWeights(
-      [10n ** 30n, 10n ** 20n, 10n ** 10n, 1n].map((score, index) => ({
-        key: `market-${index}`,
-        score,
-      })),
+  it("rejects overweight or ineligible creator selections", () => {
+    const composer = new BasketCompositionService();
+    const candidates = [candidate(0), candidate(1), candidate(2), candidate(3)];
+    assert.throws(
+      () =>
+        composer.compose(
+          candidates,
+          creatorWeights.map((weight, index) => ({
+            ...weight,
+            weightBps: index === 0 ? 3_001 : index === 3 ? 1_999 : weight.weightBps,
+          })),
+          policy,
+          NOW_MS,
+        ),
+      /1-3000/u,
     );
-    assert.equal(weights.every((row) => row.weightBps >= 1), true);
-    assert.equal(weights.reduce((sum, row) => sum + row.weightBps, 0), 10_000);
-  });
-
-  it("reserves enough event budget for every market in a low-score event", () => {
-    const allocations = allocateEventCappedWeights([
-      ...Array.from({ length: 8 }, (_, index) => ({
-        key: `low-${index}`,
-        groupKey: "low-event",
-        score: 1n,
-      })),
-      { key: "high-a", groupKey: "high-a", score: 10n ** 30n },
-      { key: "high-b", groupKey: "high-b", score: 10n ** 29n },
-      { key: "high-c", groupKey: "high-c", score: 10n ** 28n },
-    ]);
-    assert.equal(allocations.every((row) => row.weightBps > 0), true);
-    assert.equal(allocations.reduce((sum, row) => sum + row.weightBps, 0), 10_000);
-    assert.equal(
-      allocations
-        .filter((row) => row.key.startsWith("low-"))
-        .reduce((sum, row) => sum + row.weightBps, 0) <= 4_000,
-      true,
+    assert.throws(
+      () =>
+        composer.compose(
+          candidates,
+          creatorWeights.map((weight, index) =>
+            index === 0 ? { ...weight, marketId: "not-eligible" } : weight,
+          ),
+          policy,
+          NOW_MS,
+        ),
+      /ineligible/u,
     );
   });
 
@@ -143,6 +143,8 @@ describe("deterministic Composer", () => {
           return {
             basketAddress: "basket",
             transactionSignature: "signature",
+            eligibilityTransactionSignature: null,
+            compositionDraftTransactionSignature: null,
             compositionHash: request.payload.composition.hash,
             portfolioItems: [],
           };
@@ -158,8 +160,10 @@ describe("deterministic Composer", () => {
       isPerpetual: true,
       reconstitutionCadenceSecs: 2_592_000n,
       compositionNonce: 1n,
+      eligibilityNonce: 1n,
       compositionExpiry: 4_102_444_800n,
-      candidates: [candidate(0), candidate(1), candidate(2)],
+      candidates: [candidate(0), candidate(1), candidate(2), candidate(3)],
+      creatorWeights,
       policy,
     });
     assert.equal(captured?.payload.requestedPerformanceFeeBps, null);
@@ -175,7 +179,8 @@ describe("deterministic Composer", () => {
     assert.throws(
       () =>
         new BasketCompositionService().compose(
-          [malformed, candidate(1), candidate(2)],
+          [malformed, candidate(1), candidate(2), candidate(3)],
+          creatorWeights,
           policy,
           NOW_MS,
         ),

@@ -21,6 +21,7 @@ interface PortfolioStateRow extends Record<string, unknown> {
   composition_version: string;
   composition_hash: string;
   idle_pusd_units: string;
+  idle_usdc_units: string;
 }
 
 interface HoldingRow extends Record<string, unknown> {
@@ -35,6 +36,8 @@ interface HoldingRow extends Record<string, unknown> {
   mark_observed_at_ms: string;
   mark_source_hash: string;
   mark_condition: MarkCondition;
+  asset_kind: "prediction_market" | "spot";
+  token_decimals: number | null;
 }
 
 interface SupplyRow extends Record<string, unknown> {
@@ -69,6 +72,7 @@ const snapshotJson = (snapshot: NavSnapshot): string =>
     sequence: snapshot.sequence.toString(10),
     observedAtMs: snapshot.observedAtMs.toString(10),
     idlePusdUnits: snapshot.idlePusdUnits.toString(10),
+    idleUsdcUnits: (snapshot.idleUsdcUnits ?? 0n).toString(10),
     positionValuePusdUnits: snapshot.positionValuePusdUnits.toString(10),
     grossNavPusdUnits: snapshot.grossNavPusdUnits.toString(10),
     onchainTotalSharesUnits: snapshot.onchainTotalSharesUnits.toString(10),
@@ -100,7 +104,8 @@ export class PostgresBasketAttributedHoldings
         const stateResult = await transaction.query<PortfolioStateRow>(
           `SELECT basket_id, ledger_version,
                   composition_version::text AS composition_version,
-                  composition_hash, idle_pusd_units::text AS idle_pusd_units
+                  composition_hash, idle_pusd_units::text AS idle_pusd_units,
+                  idle_usdc_units::text AS idle_usdc_units
            FROM basket_portfolio_states WHERE basket_id = $1`,
           [basketId],
         );
@@ -110,6 +115,7 @@ export class PostgresBasketAttributedHoldings
         }
         const holdingResult = await transaction.query<HoldingRow>(
           `SELECT market_id, token_id, condition_id, negative_risk, outcome,
+                  asset_kind, token_decimals,
                   quantity_units::text AS quantity_units,
                   mark_price_units::text AS mark_price_units,
                   price_scale::text AS price_scale,
@@ -125,6 +131,8 @@ export class PostgresBasketAttributedHoldings
             Object.freeze({
               marketId: row.market_id,
               tokenId: row.token_id,
+              assetKind: row.asset_kind,
+              ...(row.token_decimals === null ? {} : { tokenDecimals: row.token_decimals }),
               ...(row.condition_id === null ? {} : { conditionId: row.condition_id }),
               ...(row.negative_risk === null ? {} : { negativeRisk: row.negative_risk }),
               outcome: row.outcome,
@@ -148,6 +156,7 @@ export class PostgresBasketAttributedHoldings
           ),
           compositionHash: state.composition_hash,
           idlePusdUnits: parseInteger(state.idle_pusd_units, "idle_pusd_units"),
+          idleUsdcUnits: parseInteger(state.idle_usdc_units, "idle_usdc_units"),
           holdings: Object.freeze(holdings),
         });
       },
@@ -341,6 +350,7 @@ export class PostgresBasketHoldingMarkWriter
       observedAtMs: bigint;
       sourceHash: string;
       condition: MarkCondition;
+      assetKind?: "prediction_market" | "spot";
     }>[],
     now: Date,
   ): Promise<void> {
@@ -349,7 +359,7 @@ export class PostgresBasketHoldingMarkWriter
         if (
           mark.priceUnits < 0n ||
           mark.priceScale <= 0n ||
-          mark.priceUnits > mark.priceScale ||
+          (mark.assetKind !== "spot" && mark.priceUnits > mark.priceScale) ||
           mark.observedAtMs < 0n
         ) {
           throw new RangeError("CLOB mark is outside its fixed-point bounds");

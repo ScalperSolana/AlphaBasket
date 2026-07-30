@@ -109,6 +109,13 @@ describe("lifecycle automation", () => {
       basketId: new Uint8Array(32).fill(7),
       nextCompositionVersion: 2,
       compositionHash: new Uint8Array(32).fill(8),
+      eligibilityHash: new Uint8Array(32).fill(6),
+      eligibilityNonce: 1n,
+      eligibleMarkets: [{
+        marketId: "market-a",
+        outcome: 1,
+        ctfTokenId: new Uint8Array(32).fill(9),
+      }],
       items: [{
         marketId: "market-a",
         kind: { predictionMarket: { outcome: 1, ctfTokenId: new Uint8Array(32).fill(9) } },

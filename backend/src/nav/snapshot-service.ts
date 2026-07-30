@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PublicKey } from "@solana/web3.js";
 import { accrueManagementFee } from "../accounting/math.js";
 import type {
   BasketAttributedHolding,
@@ -94,6 +95,7 @@ const hashPayload = (snapshot: Omit<NavSnapshot, "hash">): string => {
     snapshot.sequence.toString(),
     snapshot.observedAtMs.toString(),
     snapshot.idlePusdUnits.toString(),
+    (snapshot.idleUsdcUnits ?? 0n).toString(),
     snapshot.positionValuePusdUnits.toString(),
     snapshot.grossNavPusdUnits.toString(),
     snapshot.onchainTotalSharesUnits.toString(),
@@ -104,6 +106,7 @@ const hashPayload = (snapshot: Omit<NavSnapshot, "hash">): string => {
     snapshot.sharePriceScale.toString(),
     snapshot.holdings.map((holding) => [
       holding.marketId,
+      holding.assetKind ?? "prediction_market",
       holding.tokenId,
       holding.outcome,
       holding.quantityUnits.toString(),
@@ -155,7 +158,12 @@ export class NavSnapshotService {
       throw new NavInvariantError("holdings provider returned a different basket");
     }
     const onchainTotalSharesUnits = shareSupply.totalSharesUnits;
-    if (state.idlePusdUnits < 0n || onchainTotalSharesUnits < 0n || sequence < 0n) {
+    if (
+      state.idlePusdUnits < 0n ||
+      (state.idleUsdcUnits ?? 0n) < 0n ||
+      onchainTotalSharesUnits < 0n ||
+      sequence < 0n
+    ) {
       throw new NavInvariantError("NAV inputs and sequence must be non-negative");
     }
     requireBoundedText(state.ledgerVersion, "ledgerVersion", 128);
@@ -170,6 +178,7 @@ export class NavSnapshotService {
     requireU64(onchainTotalSharesUnits, "onchainTotalSharesUnits");
     requireU64(shareSupply.protocolFeeSharesUnits, "protocolFeeSharesUnits");
     requireU64(state.idlePusdUnits, "idlePusdUnits");
+    requireU64(state.idleUsdcUnits ?? 0n, "idleUsdcUnits");
     const managementFeeAccrualThroughSeconds = observedAtMs / 1_000n;
     const projectedFeeState = accrueManagementFee(
       {
@@ -197,8 +206,30 @@ export class NavSnapshotService {
       }
       seen.add(key);
       requireBoundedText(holding.marketId, "holding.marketId", 64);
-      if (!/^(?:0|[1-9][0-9]*)$/.test(holding.tokenId)) {
-        throw new NavInvariantError("holding.tokenId must be a canonical unsigned decimal integer");
+      const assetKind = holding.assetKind ?? "prediction_market";
+      if (
+        assetKind === "prediction_market" &&
+        !/^(?:0|[1-9][0-9]*)$/.test(holding.tokenId)
+      ) {
+        throw new NavInvariantError("prediction holding tokenId must be a canonical unsigned decimal integer");
+      }
+      if (assetKind === "spot") {
+        try {
+          if (new PublicKey(holding.tokenId).equals(PublicKey.default)) {
+            throw new Error("zero mint");
+          }
+        } catch {
+          throw new NavInvariantError("spot holding tokenId must be a non-zero Solana mint");
+        }
+        if (
+          holding.tokenDecimals === undefined ||
+          !Number.isInteger(holding.tokenDecimals) ||
+          holding.tokenDecimals < 0 ||
+          holding.tokenDecimals > 18 ||
+          holding.priceScale !== 10n ** BigInt(holding.tokenDecimals)
+        ) {
+          throw new NavInvariantError("spot holding price scale does not match token decimals");
+        }
       }
       requireBoundedText(holding.outcome, "holding.outcome", 64);
       requireBoundedText(holding.markSourceHash, "holding.markSourceHash", 256);
@@ -207,8 +238,11 @@ export class NavSnapshotService {
       if (holding.quantityUnits < 0n || holding.priceScale <= 0n) {
         throw new NavInvariantError(`invalid quantity or price scale for ${holding.tokenId}`);
       }
-      if (markPriceUnits < 0n || markPriceUnits > holding.priceScale) {
-        throw new NavInvariantError(`mark price is outside [0, priceScale] for ${holding.tokenId}`);
+      if (
+        markPriceUnits < 0n ||
+        (assetKind === "prediction_market" && markPriceUnits > holding.priceScale)
+      ) {
+        throw new NavInvariantError(`mark price is outside its asset bounds for ${holding.tokenId}`);
       }
       requireU64(holding.quantityUnits, "holding.quantityUnits");
       requireU64(holding.priceScale, "holding.priceScale");
@@ -220,6 +254,7 @@ export class NavSnapshotService {
       valued.push(
         deepFreezeHolding({
           marketId: holding.marketId,
+          assetKind,
           tokenId: holding.tokenId,
           outcome: holding.outcome,
           quantityUnits: holding.quantityUnits,
@@ -232,7 +267,8 @@ export class NavSnapshotService {
       );
     }
 
-    const grossNavPusdUnits = positionValuePusdUnits + state.idlePusdUnits;
+    const grossNavPusdUnits =
+      positionValuePusdUnits + state.idlePusdUnits + (state.idleUsdcUnits ?? 0n);
     const sharePriceUnits =
       totalSharesUnits === 0n
         ? null
@@ -251,6 +287,7 @@ export class NavSnapshotService {
       sequence,
       observedAtMs,
       idlePusdUnits: state.idlePusdUnits,
+      idleUsdcUnits: state.idleUsdcUnits ?? 0n,
       positionValuePusdUnits,
       grossNavPusdUnits,
       onchainTotalSharesUnits,

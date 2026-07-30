@@ -26,7 +26,8 @@ const IDL = JSON.parse(readFileSync("target/idl/polybaskets_escrow.json", "utf8"
 const PROGRAM_ID = new PublicKey(IDL.address);
 const ONE_USDC = 1_000_000;
 const FAR_EXPIRY = 4_102_444_800;
-const COMPOSITION_DOMAIN = Buffer.from("ALPHABASKET_COMPOSITION_V1");
+const COMPOSITION_DOMAIN = Buffer.from("AB_CREATE_V2");
+const PRICE_ATTESTATION_DOMAIN = Buffer.from("ALPHABASKET_SPOT_PRICE_V1");
 const DEPOSIT_INTENT_DOMAIN = Buffer.from("ALPHABASKET_DEPOSIT_INTENT_V1");
 const WITHDRAWAL_INTENT_DOMAIN = Buffer.from(
   "ALPHABASKET_WITHDRAWAL_INTENT_V1",
@@ -38,8 +39,15 @@ const asNumber = (value: BN) => Number(value.toString());
 
 type BasketAsset = {
   marketId: string;
-  kind: { predictionMarket: { outcome: number; ctfTokenId: number[] } };
+  kind:
+    | { predictionMarket: { outcome: number; ctfTokenId: number[] } }
+    | { spot: { tokenMint: PublicKey } };
   weightBps: number;
+};
+type EligibleMarket = {
+  marketId: string;
+  outcome: number;
+  ctfTokenId: number[];
 };
 
 const predictionMarket = (
@@ -55,6 +63,15 @@ const predictionMarket = (
       ctfTokenId: asArray(Buffer.alloc(32, ctfByte)),
     },
   },
+  weightBps,
+});
+const spot = (
+  tokenMint: PublicKey,
+  weightBps: number,
+  marketId: string,
+): BasketAsset => ({
+  marketId,
+  kind: { spot: { tokenMint } },
   weightBps,
 });
 
@@ -87,12 +104,21 @@ const canonicalComposition = (items: BasketAsset[]) =>
     u16(items.length),
     ...items.map((item) => {
       const market = Buffer.from(item.marketId);
-      const prediction = item.kind.predictionMarket;
+      if ("predictionMarket" in item.kind) {
+        const prediction = item.kind.predictionMarket;
+        return Buffer.concat([
+          u16(market.length),
+          market,
+          Buffer.from([0, prediction.outcome]),
+          Buffer.from(prediction.ctfTokenId),
+          u16(item.weightBps),
+        ]);
+      }
       return Buffer.concat([
         u16(market.length),
         market,
-        Buffer.from([0, prediction.outcome]),
-        Buffer.from(prediction.ctfTokenId),
+        Buffer.from([1]),
+        item.kind.spot.tokenMint.toBuffer(),
         u16(item.weightBps),
       ]);
     }),
@@ -100,6 +126,23 @@ const canonicalComposition = (items: BasketAsset[]) =>
 
 const hashComposition = (items: BasketAsset[]) =>
   createHash("sha256").update(canonicalComposition(items)).digest();
+
+const canonicalEligibility = (markets: EligibleMarket[]) =>
+  Buffer.concat([
+    u16(markets.length),
+    ...markets.map((market) => {
+      const marketId = Buffer.from(market.marketId);
+      return Buffer.concat([
+        u16(marketId.length),
+        marketId,
+        Buffer.from([market.outcome]),
+        Buffer.from(market.ctfTokenId),
+      ]);
+    }),
+  ]);
+
+const hashEligibility = (markets: EligibleMarket[]) =>
+  createHash("sha256").update(canonicalEligibility(markets)).digest();
 
 const feeCeil = (value: number, bps: number) =>
   Math.floor((value * bps + 9_999) / 10_000);
@@ -143,6 +186,7 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
   const settlementMint = Keypair.generate().publicKey;
   let config: PublicKey;
   let compositionNonce = 0;
+  let eligibilityNonce = 0;
   let settlementNonce = 0;
 
   const basketPda = (id: Buffer) =>
@@ -155,10 +199,19 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
   const receiptPda = (hash: Buffer) =>
     PublicKey.findProgramAddressSync([Buffer.from("receipt"), hash], program.programId)[0];
   const validItems: BasketAsset[] = [
-    predictionMarket("market-a", 1, 4_000, 1),
-    predictionMarket("market-b", 0, 3_500, 2),
-    predictionMarket("market-c", 1, 2_500, 3),
+    predictionMarket("market-a", 1, 3_000, 1),
+    predictionMarket("market-b", 0, 3_000, 2),
+    predictionMarket("market-c", 1, 2_000, 3),
+    predictionMarket("market-d", 0, 2_000, 4),
   ];
+  const validEligibleMarkets: EligibleMarket[] = validItems.map((item) => {
+    if (!("predictionMarket" in item.kind)) throw new Error("fixture must be prediction");
+    return {
+      marketId: item.marketId,
+      outcome: item.kind.predictionMarket.outcome,
+      ctfTokenId: item.kind.predictionMarket.ctfTokenId,
+    };
+  });
 
   const sendTx = (instructions: TransactionInstruction[], signers: Keypair[] = []) =>
     provider.sendAndConfirm!(new Transaction().add(...instructions), signers);
@@ -205,8 +258,8 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
 
   function compositionMessage(args: {
     basketId: Buffer;
-    compositionHash: Buffer;
-    items: BasketAsset[];
+    eligibilityHash: Buffer;
+    eligibilityNonce: number;
     performanceFeeBps: number;
     isPerpetual: boolean;
     reconstitutionCadenceSecs: number;
@@ -219,7 +272,8 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       args.basketId,
       creator.toBuffer(),
       creatorFeeDestination.toBuffer(),
-      args.compositionHash,
+      args.eligibilityHash,
+      u64(args.eligibilityNonce),
       u16(args.performanceFeeBps),
       Buffer.from([args.isPerpetual ? 1 : 0]),
       i64(args.reconstitutionCadenceSecs),
@@ -234,15 +288,42 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       items?: BasketAsset[];
       signatureKey?: Keypair;
       compositionHash?: Buffer;
+      eligibleMarkets?: EligibleMarket[];
       performanceFeeBps?: number;
       isPerpetual?: boolean;
       reconstitutionCadenceSecs?: number;
+      skipDraftSubmission?: boolean;
     } = {},
   ) {
     const items = options.items ?? validItems;
+    const eligibleMarkets = options.eligibleMarkets ?? validEligibleMarkets;
+    const listNonce = ++eligibilityNonce;
+    const eligibilityHash = hashEligibility(eligibleMarkets);
+    const [eligibilityList] = PublicKey.findProgramAddressSync(
+      [Buffer.from("eligibility"), eligibilityHash, u64(listNonce)],
+      program.programId,
+    );
+    const clock = await banksClient.getClock();
+    await program.methods
+      .publishEligibilityList({
+        listHash: asArray(eligibilityHash),
+        nonce: new BN(listNonce),
+        expiresAt: new BN(clock.unixTimestamp + 600n),
+        markets: eligibleMarkets,
+      })
+      .accountsStrict({
+        config,
+        eligibilityList,
+        composerSigner: composer.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([composer])
+      .rpc();
     const args = {
       basketId,
       compositionHash: options.compositionHash ?? hashComposition(items),
+      eligibilityHash,
+      eligibilityNonce: listNonce,
       items,
       performanceFeeBps: options.performanceFeeBps ?? 1_000,
       isPerpetual: options.isPerpetual ?? false,
@@ -250,15 +331,52 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       compositionNonce: ++compositionNonce,
       compositionExpiry: FAR_EXPIRY,
     };
+    const [compositionDraft] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("composition_draft"),
+        args.compositionHash,
+        u64(args.compositionNonce),
+      ],
+      program.programId,
+    );
+    let draftBuilder = program.methods
+      .publishCompositionDraft({
+        compositionHash: asArray(args.compositionHash),
+        eligibilityHash: asArray(args.eligibilityHash),
+        eligibilityNonce: new BN(args.eligibilityNonce),
+        compositionNonce: new BN(args.compositionNonce),
+        items: args.items,
+      })
+      .accountsStrict({
+        config,
+        compositionDraft,
+        eligibilityList,
+        composerSigner: composer.publicKey,
+        systemProgram: SystemProgram.programId,
+      });
+    const [tokenAllowlist] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_allowlist")],
+      program.programId,
+    );
+    if (items.some((item) => "spot" in item.kind)) {
+      draftBuilder = draftBuilder.remainingAccounts([
+        { pubkey: tokenAllowlist, isSigner: false, isWritable: false },
+      ]);
+    }
+    const draftIx = await draftBuilder.instruction();
+    if (!options.skipDraftSubmission) {
+      await sendTx([draftIx], [composer]);
+    }
     const signatureIx = Ed25519Program.createInstructionWithPrivateKey({
       privateKey: (options.signatureKey ?? composer).secretKey,
       message: compositionMessage(args),
     });
-    const createIx = await program.methods
+    let createBuilder = program.methods
       .createBasket({
         basketId: asArray(args.basketId),
         compositionHash: asArray(args.compositionHash),
-        items: args.items,
+        eligibilityHash: asArray(args.eligibilityHash),
+        eligibilityNonce: new BN(args.eligibilityNonce),
         creator,
         creatorFeeDestination,
         performanceFeeBps:
@@ -273,18 +391,32 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       .accountsStrict({
         config,
         basket: basketPda(basketId),
+        compositionDraft,
+        eligibilityList,
         composerSigner: composer.publicKey,
         ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-    return { signatureIx, createIx };
+      });
+    if (items.some((item) => "spot" in item.kind)) {
+      createBuilder = createBuilder.remainingAccounts([
+        { pubkey: tokenAllowlist, isSigner: false, isWritable: false },
+      ]);
+    }
+    const createIx = await createBuilder.instruction();
+    return {
+      signatureIx,
+      createIx,
+      draftIx,
+      eligibilityList,
+      compositionDraft,
+    };
   }
 
   async function createBasket(
     basketId: Buffer,
     options: {
       items?: BasketAsset[];
+      eligibleMarkets?: EligibleMarket[];
       performanceFeeBps?: number;
       isPerpetual?: boolean;
       reconstitutionCadenceSecs?: number;
@@ -293,6 +425,36 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     const { signatureIx, createIx } = await buildCreateBasket(basketId, options);
     await sendTx([signatureIx, createIx], [composer]);
     return basketPda(basketId);
+  }
+
+  const tokenAllowlistPda = () =>
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("token_allowlist")],
+      program.programId,
+    )[0];
+
+  async function registerSpotToken(
+    tokenMint: PublicKey,
+    enabled = true,
+  ): Promise<void> {
+    await program.methods
+      .registerToken({
+        tokenMint,
+        jupiterVerified: true,
+        assetClass: { crypto: {} },
+        availability: { twentyFourSeven: {} },
+        priceSource: { signedTwap: {} },
+        backingAttestationHash: asArray(Buffer.alloc(32)),
+        enabled,
+      })
+      .accountsStrict({
+        config,
+        tokenAllowlist: tokenAllowlistPda(),
+        admin: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([admin])
+      .rpc();
   }
 
   async function deposit(args: {
@@ -641,29 +803,33 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     );
 
     const overweightItems: BasketAsset[] = [
-      predictionMarket("market-a", 1, 4_001, 4),
-      predictionMarket("market-b", 0, 3_499, 5),
-      predictionMarket("market-c", 1, 2_500, 6),
+      predictionMarket("market-a", 1, 3_001, 1),
+      predictionMarket("market-b", 0, 2_999, 2),
+      predictionMarket("market-c", 1, 2_000, 3),
+      predictionMarket("market-d", 0, 2_000, 4),
     ];
     const overweight = await buildCreateBasket(bytes32(), {
       items: overweightItems,
+      skipDraftSubmission: true,
     });
     await expectRevert(
-      [overweight.signatureIx, overweight.createIx],
+      [overweight.draftIx],
       [composer],
       /MarketWeightExceeded/,
     );
 
     const duplicateCtfItems: BasketAsset[] = [
-      predictionMarket("market-a", 1, 4_000, 7),
-      predictionMarket("market-b", 0, 3_500, 7),
-      predictionMarket("market-c", 1, 2_500, 8),
+      predictionMarket("market-a", 1, 3_000, 1),
+      predictionMarket("market-b", 0, 3_000, 1),
+      predictionMarket("market-c", 1, 2_000, 3),
+      predictionMarket("market-d", 0, 2_000, 4),
     ];
     const duplicateCtf = await buildCreateBasket(bytes32(), {
       items: duplicateCtfItems,
+      skipDraftSubmission: true,
     });
     await expectRevert(
-      [duplicateCtf.signatureIx, duplicateCtf.createIx],
+      [duplicateCtf.draftIx],
       [composer],
       /InvalidBasketItems/,
     );
@@ -688,6 +854,134 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     assert.equal(zeroFeeStored.performanceFeeBps, 0);
   });
 
+  it("enforces the spot allowlist and 30%/20% source-aware caps", async () => {
+    const spotMints = Array.from({ length: 4 }, () => Keypair.generate().publicKey);
+    for (const mint of spotMints) await registerSpotToken(mint);
+
+    const spotItems = [
+      spot(spotMints[0]!, 3_000, "spot-a"),
+      spot(spotMints[1]!, 3_000, "spot-b"),
+      spot(spotMints[2]!, 2_000, "spot-c"),
+      spot(spotMints[3]!, 2_000, "spot-d"),
+    ];
+    const spotBasket = await createBasket(bytes32(), {
+      items: spotItems,
+      eligibleMarkets: [],
+    });
+    const storedSpot = await program.account.basket.fetch(spotBasket);
+    assert.equal(storedSpot.items.length, 4);
+    assert.isTrue("spot" in storedSpot.items[0]!.kind);
+
+    const mixedItems = [
+      predictionMarket("mixed-market-a", 1, 2_000, 11),
+      predictionMarket("mixed-market-b", 0, 2_000, 12),
+      spot(spotMints[0]!, 2_000, "mixed-spot-a"),
+      spot(spotMints[1]!, 2_000, "mixed-spot-b"),
+      spot(spotMints[2]!, 2_000, "mixed-spot-c"),
+    ];
+    const mixedEligible: EligibleMarket[] = mixedItems
+      .filter((item) => "predictionMarket" in item.kind)
+      .map((item) => {
+        if (!("predictionMarket" in item.kind)) throw new Error("fixture mismatch");
+        return {
+          marketId: item.marketId,
+          outcome: item.kind.predictionMarket.outcome,
+          ctfTokenId: item.kind.predictionMarket.ctfTokenId,
+        };
+      });
+    const mixedBasket = await createBasket(bytes32(), {
+      items: mixedItems,
+      eligibleMarkets: mixedEligible,
+    });
+    const storedMixed = await program.account.basket.fetch(mixedBasket);
+    assert.equal(storedMixed.items.length, 5);
+
+    const overweightMixed = [
+      { ...mixedItems[0]!, weightBps: 2_001 },
+      mixedItems[1]!,
+      mixedItems[2]!,
+      mixedItems[3]!,
+      { ...mixedItems[4]!, weightBps: 1_999 },
+    ];
+    const overweight = await buildCreateBasket(bytes32(), {
+      items: overweightMixed,
+      eligibleMarkets: mixedEligible,
+      skipDraftSubmission: true,
+    });
+    await expectRevert(
+      [overweight.draftIx],
+      [composer],
+      /MarketWeightExceeded/,
+    );
+
+    await registerSpotToken(spotMints[0]!, false);
+    const disabled = await buildCreateBasket(bytes32(), {
+      items: spotItems,
+      eligibleMarkets: [],
+      skipDraftSubmission: true,
+    });
+    await expectRevert(
+      [disabled.draftIx],
+      [composer],
+      /TokenNotAllowlisted/,
+    );
+    // Disabling is prospective only; it does not mutate an existing basket.
+    assert.equal((await program.account.basket.fetch(spotBasket)).items.length, 4);
+  });
+
+  it("stores only fresh Composer-signed TWAP fallback prices and rejects replay", async () => {
+    const tokenMint = Keypair.generate().publicKey;
+    await registerSpotToken(tokenMint);
+    const [priceAttestation] = PublicKey.findProgramAddressSync(
+      [Buffer.from("price_attestation"), tokenMint.toBuffer()],
+      program.programId,
+    );
+    const observedAt = Number((await banksClient.getClock()).unixTimestamp);
+    const priceArgs = {
+      tokenMint,
+      priceValue: new BN(12_345_678),
+      confidenceBps: 75,
+      observedAt: new BN(observedAt),
+      validUntil: new BN(observedAt + 120),
+      nonce: new BN(1),
+    };
+    const message = Buffer.concat([
+      PRICE_ATTESTATION_DOMAIN,
+      program.programId.toBuffer(),
+      tokenMint.toBuffer(),
+      u64(12_345_678),
+      u16(75),
+      i64(observedAt),
+      i64(observedAt + 120),
+      u64(1),
+    ]);
+    const verifyIx = Ed25519Program.createInstructionWithPrivateKey({
+      privateKey: composer.secretKey,
+      message,
+    });
+    const submitIx = await program.methods
+      .submitPriceAttestation(priceArgs)
+      .accountsStrict({
+        config,
+        tokenAllowlist: tokenAllowlistPda(),
+        priceAttestation,
+        composerSigner: composer.publicKey,
+        ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    await sendTx([verifyIx, submitIx], [composer]);
+    const stored = await program.account.priceAttestation.fetch(priceAttestation);
+    assert.equal(asNumber(stored.priceValue), 12_345_678);
+    assert.equal(stored.confidenceBps, 75);
+
+    await expectRevert(
+      [verifyIx, submitIx],
+      [composer],
+      /PriceAttestationNonceNotIncreasing/,
+    );
+  });
+
   it("rejects replayed composition nonces during reconstitution", async () => {
     const basket = await createBasket(bytes32(), {
       isPerpetual: true,
@@ -701,16 +995,33 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
       .rpc();
 
     const stored = await program.account.basket.fetch(basket);
+    const eligibilityHash = hashEligibility(validEligibleMarkets);
+    const [eligibilityList] = PublicKey.findProgramAddressSync(
+      [Buffer.from("eligibility"), eligibilityHash, u64(eligibilityNonce)],
+      program.programId,
+    );
+    const compositionHash = hashComposition(validItems);
+    const [compositionDraft] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("composition_draft"),
+        compositionHash,
+        u64(asNumber(stored.lastCompositionNonce)),
+      ],
+      program.programId,
+    );
     const replay = await program.methods
       .completeReconstitution({
-        compositionHash: asArray(hashComposition(validItems)),
-        items: validItems,
+        compositionHash: asArray(compositionHash),
+        eligibilityHash: asArray(eligibilityHash),
+        eligibilityNonce: new BN(eligibilityNonce),
         compositionNonce: stored.lastCompositionNonce,
         compositionExpiry: new BN(FAR_EXPIRY),
       })
       .accountsStrict({
         config,
         basket,
+        compositionDraft,
+        eligibilityList,
         backendSigner: backend.publicKey,
         composerSigner: composer.publicKey,
         ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -804,15 +1115,20 @@ describe("AlphaBasket v2 share accounting (bankrun)", () => {
     assert.equal(asNumber(receipt.protocolFee), feeCeil(grossAmount, 50));
   });
 
-  it("keeps the 500 USDC per-user gross deposit cap", async () => {
+  it("allows deposits above the former user and basket caps", async () => {
     const basket = await createBasket(bytes32());
-    await deposit({
+    const grossAmount = 10_001 * ONE_USDC;
+    const completed = await deposit({
       basket,
-      grossAmount: 501 * ONE_USDC,
+      grossAmount,
       basketNavValue: 0,
       sharePrice: ONE_USDC,
-      expectedError: /UserDepositLimitExceeded/,
     });
+
+    const storedBasket = await program.account.basket.fetch(basket);
+    const storedPosition = await program.account.position.fetch(completed.position);
+    assert.equal(asNumber(storedBasket.grossDepositedValue), grossAmount);
+    assert.equal(asNumber(storedPosition.grossDepositedValue), grossAmount);
   });
 
   it("requires the user's signature and rejects replayed intent nonces", async () => {

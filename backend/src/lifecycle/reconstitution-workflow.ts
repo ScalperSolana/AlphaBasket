@@ -26,15 +26,44 @@ export interface ReconstitutionWorkflowResult {
 function executionFromCheckpoint(checkpoint: Readonly<Record<string, unknown>>): ReconstitutionExecutionResult {
   const executionHash = checkpoint.executionHash;
   const orderIds = checkpoint.orderIds;
+  const jupiterTransactions = checkpoint.jupiterTransactions;
   const realized = checkpoint.realizedPusdDeltaUnits;
+  const realizedUsdc = checkpoint.realizedUsdcDeltaUnits;
   const executedAt = checkpoint.executedAtMs;
-  if (typeof executionHash !== "string" || !Array.isArray(orderIds) || !orderIds.every((id) => typeof id === "string") || typeof realized !== "string" || typeof executedAt !== "string") {
+  if (
+    typeof executionHash !== "string" ||
+    !Array.isArray(orderIds) ||
+    !orderIds.every((id) => typeof id === "string") ||
+    (
+      jupiterTransactions !== undefined &&
+      (
+        !Array.isArray(jupiterTransactions) ||
+        !jupiterTransactions.every((id) => typeof id === "string")
+      )
+    ) ||
+    typeof realized !== "string" ||
+    (
+      realizedUsdc !== undefined &&
+      typeof realizedUsdc !== "string"
+    ) ||
+    typeof executedAt !== "string"
+  ) {
     throw new Error("reconstitution checkpoint is incomplete");
   }
   return Object.freeze({
     executionHash,
     orderIds: Object.freeze(orderIds as string[]),
+    ...(jupiterTransactions === undefined
+      ? {}
+      : {
+          jupiterTransactions: Object.freeze(
+            jupiterTransactions as string[],
+          ),
+        }),
     realizedPusdDeltaUnits: BigInt(realized),
+    ...(realizedUsdc === undefined
+      ? {}
+      : { realizedUsdcDeltaUnits: BigInt(realizedUsdc) }),
     executedAtMs: BigInt(executedAt),
   });
 }
@@ -60,7 +89,12 @@ export class ReconstitutionWorkflow {
 
   public async execute(request: ReconstitutionWorkflowRequest): Promise<ReconstitutionWorkflowResult> {
     const auth = request.authorization;
-    if (auth.nextCompositionVersion <= 1 || auth.items.length === 0 || auth.compositionNonce <= 0n) {
+    if (
+      auth.nextCompositionVersion <= 1 ||
+      auth.items.length === 0 ||
+      auth.compositionNonce <= 0n ||
+      auth.eligibilityNonce <= 0n
+    ) {
       throw new RangeError("invalid reconstitution authorization");
     }
     let run = await this.runs.createOrLoad({
@@ -99,7 +133,18 @@ export class ReconstitutionWorkflow {
         ...run.checkpoint,
         executionHash: executed.executionHash,
         orderIds: [...executed.orderIds],
+        ...(executed.jupiterTransactions === undefined
+          ? {}
+          : {
+              jupiterTransactions: [...executed.jupiterTransactions],
+            }),
         realizedPusdDeltaUnits: executed.realizedPusdDeltaUnits.toString(10),
+        ...(executed.realizedUsdcDeltaUnits === undefined
+          ? {}
+          : {
+              realizedUsdcDeltaUnits:
+                executed.realizedUsdcDeltaUnits.toString(10),
+            }),
         executedAtMs: executed.executedAtMs.toString(10),
       }, this.clock.now());
     } else {

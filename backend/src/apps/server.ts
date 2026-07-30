@@ -24,6 +24,12 @@ import {
 import idl from "../contract/generated/polybaskets_escrow.json" with { type: "json" };
 import { PgSqlClient } from "../persistence/index.js";
 import {
+  JupiterPriceV3Client,
+  JupiterSpotEligibilityService,
+  JupiterSwapV2Client,
+  JupiterTokensV2Client,
+} from "../jupiter/index.js";
+import {
   JsonHttpClient,
   PolymarketBridgeRest,
 } from "../polymarket/index.js";
@@ -43,6 +49,7 @@ import {
 import {
   AlphaBasketApiService,
   LiveBridgeDepositFundingRoute,
+  JupiterSpotCompositionAdmission,
   PostgresFinancialRequestStore,
   PostgresQuoteContextStore,
   PrefundedStagingDepositFundingRoute,
@@ -154,6 +161,38 @@ const basketCreation = new BasketCreationOrchestrator(
   new AnchorBasketCreationGateway(program),
   { nowMs: () => BigInt(Date.now()) },
 );
+const spotAdmission = config.jupiter.enabled
+  ? new JupiterSpotCompositionAdmission(
+      new JupiterSpotEligibilityService(
+        new JupiterTokensV2Client(
+          http,
+          required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+          config.jupiter.tokensUrl,
+        ),
+        new JupiterSwapV2Client(
+          http,
+          required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+          new PublicKey(config.jupiter.aggregatorProgramId),
+          config.jupiter.swapUrl,
+        ),
+        config.jupiter.xStockMints.map((mint) => new PublicKey(mint)),
+      ),
+      new JupiterPriceV3Client(
+        http,
+        required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+        config.jupiter.priceUrl,
+      ),
+      {
+        settlementMint: new PublicKey(config.solana.capital.usdcMint),
+        probeTaker: new PublicKey(required(
+          config.polymarket.solanaSettlementReceiver,
+          "SOLANA_SETTLEMENT_RECEIVER",
+        )),
+        routeProbeAmountUnits: config.jupiter.routeProbeUnits,
+        slippageBps: 100,
+      },
+    )
+  : undefined;
 const walletRegistry = new PostgresExecutionWalletRegistry(sql);
 const walletRoutes = new StickyExecutionWalletRoute(
   new StickyWalletAllocator(
@@ -185,6 +224,17 @@ const financialApi = new AlphaBasketApiService(
   walletRoutes,
   fundingRoutes,
   basketCreation,
+  {
+    ...(config.jupiter.enabled
+      ? {
+          spotFundingDestination: required(
+            config.polymarket.solanaSettlementReceiver,
+            "SOLANA_SETTLEMENT_RECEIVER",
+          ),
+          spotAdmission: spotAdmission as JupiterSpotCompositionAdmission,
+        }
+      : {}),
+  },
 );
 
 const server = createBackendHttpServer({

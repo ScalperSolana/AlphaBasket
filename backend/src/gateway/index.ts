@@ -6,3 +6,5 @@ export * from "./solana-split-service.js";
 export * from "./service.js";
 export * from "./http-server.js";
 export * from "./solana-message-policy.js";
+export * from "./jupiter-swap-service.js";
+export * from "./jupiter-finality.js";

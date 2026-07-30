@@ -24,7 +24,10 @@ function canonicalHash(request: GatewaySolanaSplitRequest): string {
     "ALPHABASKET_REMOTE_SOLANA_SPLIT_V1",
     request.deploymentMode,
     request.idempotencyKey,
-    request.sourceBridgeTransaction,
+    request.sourceBridgeTransaction ?? "none",
+    (request.sourceBridgeAmountUnits ?? 0n).toString(10),
+    [...(request.sourceJupiterTransactions ?? [])].sort(),
+    (request.idleUsdcAmountUnits ?? 0n).toString(10),
     request.mint,
     request.userDestination,
     request.creatorDestination,
@@ -126,22 +129,19 @@ export class SolanaUsdcSplitGateway {
     if (hash !== request.requestHash) {
       throw new Error("Solana split request hash does not match its canonical content");
     }
-    const receipt = await this.bridgeReceipt.verifyReceived({
-      bridgeAddress: request.sourceBridgeTransaction,
-      destination: this.options.sourceOwner.toBase58(),
-      mint: this.options.usdcMint.toBase58(),
-      expectedMaximumUnits: total,
-      destinationTransactionHash: request.sourceBridgeTransaction,
-    });
-    if (receipt.amountUnits !== total) {
-      throw new Error("Solana split amounts do not equal the finalized bridge receipt");
-    }
+    const capitalSources = await this.validateSources(request, total);
     const requestKey = `solana-split:${request.idempotencyKey}`;
     const prepared = await this.store.prepare({
       requestKey,
       requestKind: "solana_split",
       requestHash: hash,
       build: async () => this.buildSignedSplit(request),
+      now: this.now(),
+    });
+    await this.store.claimCapitalSources({
+      requestKey,
+      requestHash: hash,
+      sources: capitalSources,
       now: this.now(),
     });
     const transactionSignature = prepared.transactionReference;
@@ -231,6 +231,84 @@ export class SolanaUsdcSplitGateway {
       throw new RangeError("Solana split exceeds the gateway amount policy");
     }
     return total;
+  }
+
+  private async validateSources(
+    request: GatewaySolanaSplitRequest,
+    total: bigint,
+  ): Promise<readonly Readonly<{
+    kind: "bridge_receipt" | "jupiter_swap";
+    reference: string;
+    amountUnits: bigint;
+  }>[]> {
+    const bridgeAmount = request.sourceBridgeAmountUnits ??
+      (request.sourceBridgeTransaction === null ? 0n : total);
+    const idleAmount = request.idleUsdcAmountUnits ?? 0n;
+    if (bridgeAmount < 0n || idleAmount < 0n) {
+      throw new RangeError("Solana split source amounts must be non-negative");
+    }
+    if ((request.sourceBridgeTransaction === null) !== (bridgeAmount === 0n)) {
+      throw new Error("Solana split bridge proof and amount must either both be present or absent");
+    }
+    if (request.sourceBridgeTransaction !== null) {
+      const receipt = await this.bridgeReceipt.verifyReceived({
+        bridgeAddress: request.sourceBridgeTransaction,
+        destination: this.options.sourceOwner.toBase58(),
+        mint: this.options.usdcMint.toBase58(),
+        expectedMaximumUnits: bridgeAmount,
+        destinationTransactionHash: request.sourceBridgeTransaction,
+      });
+      if (receipt.amountUnits !== bridgeAmount) {
+        throw new Error("Solana split bridge amount does not equal its finalized receipt");
+      }
+    }
+    const capitalSources: {
+      kind: "bridge_receipt" | "jupiter_swap";
+      reference: string;
+      amountUnits: bigint;
+    }[] = request.sourceBridgeTransaction === null
+      ? []
+      : [{
+          kind: "bridge_receipt",
+          reference: request.sourceBridgeTransaction,
+          amountUnits: bridgeAmount,
+        }];
+    const references = request.sourceJupiterTransactions ?? [];
+    if (new Set(references).size !== references.length) {
+      throw new Error("Solana split contains duplicate Jupiter transaction proofs");
+    }
+    let jupiterAmount = 0n;
+    for (const reference of references) {
+      const prepared = await this.store.findFinalizedByTransactionReference?.(
+        "jupiter_swap",
+        reference,
+      );
+      if (prepared === undefined || prepared === null) {
+        throw new Error("Solana split Jupiter source is absent from the finalized gateway journal");
+      }
+      const outputMint = prepared.result?.outputMint;
+      const output = prepared.result?.filledOutputUnits;
+      if (
+        outputMint !== this.options.usdcMint.toBase58() ||
+        typeof output !== "string" ||
+        !/^[1-9][0-9]*$/u.test(output)
+      ) {
+        throw new Error("Solana split Jupiter source journal is malformed or not USDC");
+      }
+      const amount = BigInt(output);
+      jupiterAmount += amount;
+      capitalSources.push({
+        kind: "jupiter_swap",
+        reference,
+        amountUnits: amount,
+      });
+    }
+    if (bridgeAmount + jupiterAmount + idleAmount !== total) {
+      throw new Error("Solana split outputs do not reconcile with finalized hybrid sources");
+    }
+    return Object.freeze(capitalSources.map((source) =>
+      Object.freeze(source),
+    ));
   }
 
   private async buildSignedSplit(

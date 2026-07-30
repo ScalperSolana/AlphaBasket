@@ -7,7 +7,14 @@ import type {
   DepositFundingRoutePort,
   ExecutionWalletRoute,
   ExecutionWalletRoutePort,
+  SpotCompositionAdmissionPort,
 } from "./application-service.js";
+import type {
+  JupiterPricePort,
+  JupiterSpotEligibilityService,
+  JupiterTokenAssetClass,
+} from "../jupiter/index.js";
+import { PublicKey } from "@solana/web3.js";
 
 export class StickyExecutionWalletRoute implements ExecutionWalletRoutePort {
   public constructor(
@@ -48,5 +55,54 @@ export class PrefundedStagingDepositFundingRoute implements DepositFundingRouteP
 
   public async createDepositFundingAddress(_polymarketWallet: string): Promise<string> {
     return this.stagingDestination;
+  }
+}
+
+export class JupiterSpotCompositionAdmission
+implements SpotCompositionAdmissionPort {
+  public constructor(
+    private readonly eligibility: JupiterSpotEligibilityService,
+    private readonly prices: JupiterPricePort,
+    private readonly options: Readonly<{
+      settlementMint: PublicKey;
+      probeTaker: PublicKey;
+      routeProbeAmountUnits: bigint;
+      slippageBps: number;
+    }>,
+  ) {}
+
+  public async admit(request: {
+    readonly marketId: string;
+    readonly tokenMint: PublicKey;
+    readonly assetClass: JupiterTokenAssetClass;
+    readonly weightBps: number;
+  }) {
+    const [eligible, prices] = await Promise.all([
+      this.eligibility.requireEligible({
+        tokenMint: request.tokenMint,
+        assetClass: request.assetClass,
+        settlementMint: this.options.settlementMint,
+        routeProbeAmountUnits: this.options.routeProbeAmountUnits,
+        probeTaker: this.options.probeTaker,
+        slippageBps: this.options.slippageBps,
+      }),
+      this.prices.getUsdcPrices(
+        [request.tokenMint],
+        this.options.settlementMint,
+      ),
+    ]);
+    const price = prices[0];
+    if (price === undefined || !price.mint.equals(request.tokenMint)) {
+      throw new Error("Jupiter returned no admission price for the selected spot token");
+    }
+    return Object.freeze({
+      marketId: request.marketId,
+      tokenMint: request.tokenMint,
+      tokenDecimals: eligible.token.decimals,
+      symbol: eligible.token.symbol,
+      weightBps: request.weightBps,
+      initialMarkPriceUnits: price.priceUsdcUnits,
+      markSourceHash: price.sourceHash,
+    });
   }
 }

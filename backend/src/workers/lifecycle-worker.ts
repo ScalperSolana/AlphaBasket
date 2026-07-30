@@ -11,6 +11,7 @@ export function lifecycleAutomationTasks(
     reconciliationIntervalMs: number;
     outboxIntervalMs?: number;
     outbox?: OutboxDispatcher;
+    beforeReconciliation?: () => Promise<void>;
   }>,
 ): readonly PeriodicTask[] {
   const tasks: PeriodicTask[] = [
@@ -22,7 +23,10 @@ export function lifecycleAutomationTasks(
     Object.freeze({
       name: "reconciliation",
       intervalMs: options.reconciliationIntervalMs,
-      run: async () => { await reconciliation.runOnce(); },
+      run: async () => {
+        await options.beforeReconciliation?.();
+        await reconciliation.runOnce();
+      },
     }),
   ];
   if (options.outbox !== undefined) {

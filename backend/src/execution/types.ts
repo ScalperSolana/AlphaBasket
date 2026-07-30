@@ -163,7 +163,10 @@ export interface SettlementResult {
 export interface SolanaAtomicSplitPort {
   distribute(request: {
     readonly idempotencyKey: string;
-    readonly sourceBridgeTransaction: string;
+    readonly sourceBridgeTransaction: string | null;
+    readonly sourceBridgeAmountUnits?: bigint;
+    readonly sourceJupiterTransactions?: readonly string[];
+    readonly idleUsdcAmountUnits?: bigint;
     readonly mint: string;
     readonly userDestination: string;
     readonly creatorDestination: string;
