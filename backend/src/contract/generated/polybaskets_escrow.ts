@@ -3008,46 +3008,61 @@ export type PolybasketsEscrow = {
     },
     {
       "code": 6055,
+      "name": "perpDirectionMismatch",
+      "msg": "Recorded trade direction does not match the approved composition item"
+    },
+    {
+      "code": 6056,
+      "name": "perpLeverageMismatch",
+      "msg": "Recorded leverage does not match the approved composition item"
+    },
+    {
+      "code": 6057,
+      "name": "perpBasketMustBePerpetual",
+      "msg": "A basket holding perpetuals must be perpetual; perps never resolve"
+    },
+    {
+      "code": 6058,
       "name": "traderRegistryMismatch",
       "msg": "Trader registry does not belong to this execution wallet"
     },
     {
-      "code": 6056,
+      "code": 6059,
       "name": "unsupportedTraderPdaIndex",
       "msg": "Phoenix trader PDA index is not the supported user index"
     },
     {
-      "code": 6057,
+      "code": 6060,
       "name": "zeroEntryMarkPrice",
       "msg": "Recorded entry mark price must be non-zero when opening a position"
     },
     {
-      "code": 6058,
+      "code": 6061,
       "name": "zeroMarginPosted",
       "msg": "Recorded margin must be non-zero when opening a position"
     },
     {
-      "code": 6059,
+      "code": 6062,
       "name": "stalePerpExecution",
       "msg": "Phoenix execution timestamp is too old to settle"
     },
     {
-      "code": 6060,
+      "code": 6063,
       "name": "stalePerpAttestation",
       "msg": "Phoenix event timestamp is too old to attest"
     },
     {
-      "code": 6061,
+      "code": 6064,
       "name": "timestampInFuture",
       "msg": "Timestamp is further in the future than clock skew allows"
     },
     {
-      "code": 6062,
+      "code": 6065,
       "name": "mismatchedBasket",
       "msg": "Referenced basket does not match the basket this record belongs to"
     },
     {
-      "code": 6063,
+      "code": 6066,
       "name": "marketIdTooLong",
       "msg": "Market identifier exceeds the maximum supported length"
     }

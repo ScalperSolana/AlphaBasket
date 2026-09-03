@@ -900,6 +900,7 @@ pub fn complete_reconstitution_handler(
         &ctx.accounts.composition_draft.items,
         &ctx.accounts.eligibility_list,
         ctx.remaining_accounts,
+        ctx.accounts.basket.is_perpetual,
     )?;
     require!(
         args.composition_expiry > now,

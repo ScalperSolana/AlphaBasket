@@ -315,6 +315,12 @@ pub fn publish_composition_draft_handler(
         &args.items,
         &ctx.accounts.eligibility_list,
         ctx.remaining_accounts,
+        // A draft is staging and is published before the basket it will be used
+        // for is known, so the perpetual flag is not available here. The real
+        // check happens where the flag exists: `create_basket` reads it from its
+        // own args, and `complete_reconstitution` from the basket. Passing
+        // `true` waives only that one rule; every other check still applies.
+        true,
     )?;
     let canonical = canonical_composition_bytes(&args.items)?;
     require!(

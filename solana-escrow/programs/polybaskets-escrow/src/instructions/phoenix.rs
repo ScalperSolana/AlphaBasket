@@ -279,16 +279,32 @@ pub fn complete_phoenix_trade_handler(
 
     match &mut basket.items[index].kind {
         PositionKind::Perp {
+            direction,
+            leverage_bps,
             entry_mark_price,
             margin_posted,
             phoenix_subaccount,
-            ..
         } => {
             // The composition item must name the same isolated subaccount the
             // trade actually used, or this fill belongs to a different position.
             require!(
                 *phoenix_subaccount == args.phoenix_subaccount,
                 EscrowError::SubaccountMismatch
+            );
+
+            // `direction` and `leverage_bps` are terms the Composer approved,
+            // and this instruction never writes them. It does have to *check*
+            // them: a fill reporting a different direction or leverage means the
+            // backend traded something other than what the composition
+            // specifies, and recording it against this item would make the
+            // basket claim a position it does not hold.
+            require!(
+                *direction == args.direction,
+                EscrowError::PerpDirectionMismatch
+            );
+            require!(
+                *leverage_bps == args.leverage_bps,
+                EscrowError::PerpLeverageMismatch
             );
 
             // Both figures are post-execution reads, not quotes. `margin_posted`
@@ -309,12 +325,6 @@ pub fn complete_phoenix_trade_handler(
         // compiler cannot know that, and an unchecked branch would silently no-op.
         _ => return Err(EscrowError::MixedAssetClassBasket.into()),
     }
-
-    // `direction` and `leverage_bps` are deliberately not written. They are terms
-    // of the position the Composer approved, not outcomes of a fill; a fill that
-    // appeared to change them would mean the backend traded something other than
-    // what the composition specifies, and that should surface as a mismatch
-    // rather than be absorbed into the basket.
 
     basket.last_settlement_nonce = args.settlement_nonce;
     basket.updated_at = now;

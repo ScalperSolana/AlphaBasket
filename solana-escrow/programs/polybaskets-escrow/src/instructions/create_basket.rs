@@ -110,6 +110,7 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
         &ctx.accounts.composition_draft.items,
         &ctx.accounts.eligibility_list,
         ctx.remaining_accounts,
+        args.is_perpetual,
     )?;
     let composition_bytes = canonical_composition_bytes(&ctx.accounts.composition_draft.items)?;
     require!(
@@ -174,6 +175,7 @@ pub(crate) fn validate_basket_items(
     items: &[BasketAsset],
     eligibility_list: &EligibilityList,
     extra_accounts: &[AccountInfo],
+    is_perpetual: bool,
 ) -> Result<()> {
     require!(
         !items.is_empty() && items.len() <= MAX_BASKET_ITEMS,
@@ -195,6 +197,17 @@ pub(crate) fn validate_basket_items(
     require!(
         !(has_perp && (has_prediction || has_spot)),
         EscrowError::MixedAssetClassBasket
+    );
+
+    // A perpetual position has no resolution date, so a basket holding one can
+    // never be resolved and must reconstitute on a cadence instead. Without this
+    // a perp basket created with `is_perpetual = false` could reach
+    // `begin_resolution`, which would move it to `Resolving` and then
+    // `Redeemable` against a final NAV, while the underlying Phoenix positions
+    // were still open and still moving.
+    require!(
+        !has_perp || is_perpetual,
+        EscrowError::PerpBasketMustBePerpetual
     );
 
     let weight_cap = if has_prediction && has_spot {

@@ -291,7 +291,7 @@ describe("Phoenix perpetual settlement (bankrun)", () => {
     items?: BasketAsset[];
     perpMarkets?: string[];
     perpList?: PublicKey;
-    build?: boolean;
+    isPerpetual?: boolean;
   } = {}) {
     const items = options.items ?? perpItems;
     const basketId = Buffer.alloc(32, ++basketCounter);
@@ -355,8 +355,8 @@ describe("Phoenix perpetual settlement (bankrun)", () => {
       eligibilityHash,
       eligibilityNonce: listNonce,
       performanceFeeBps: 1_000,
-      isPerpetual: true,
-      reconstitutionCadenceSecs: 86_400,
+      isPerpetual: options.isPerpetual ?? true,
+      reconstitutionCadenceSecs: (options.isPerpetual ?? true) ? 86_400 : 0,
       compositionNonce: nonce,
       compositionExpiry: FAR_EXPIRY,
     };
@@ -660,6 +660,20 @@ describe("Phoenix perpetual settlement (bankrun)", () => {
       await expectRevert([fixture.draftIx], [composer], /InvalidBasketItems/);
     });
 
+    it("refuses a perpetual basket that is not marked perpetual", async () => {
+      // A perp has no resolution date, so a basket holding one can never be
+      // resolved. Without this rule such a basket could reach begin_resolution
+      // and be marked Redeemable against a final NAV while the underlying
+      // Phoenix positions were still open and still moving.
+      const fixture = await createPerpBasket({ isPerpetual: false });
+      await sendTx([fixture.draftIx], [composer]);
+      await expectRevert(
+        [fixture.signatureIx, fixture.createIx],
+        [composer],
+        /PerpBasketMustBePerpetual/,
+      );
+    });
+
     it("excludes settlement-written fields from the composition hash", () => {
       // Two compositions differing only in margin and entry price must hash the
       // same, or the first fill would invalidate the basket's composition hash.
@@ -790,6 +804,57 @@ describe("Phoenix perpetual settlement (bankrun)", () => {
         settlementNonce: 1,
       });
       await expectRevert([ix], [backend], /SettlementNonceNotIncreasing/);
+    });
+
+    it("rejects a fill whose direction disagrees with the composition", async () => {
+      // The Composer approved a long. A fill reporting a short means the backend
+      // traded something other than what the composition specifies, and
+      // recording it would make the basket claim a position it does not hold.
+      const clock = await banksClient.getClock();
+      const ix = await program.methods
+        .completePhoenixTrade({
+          executionHash: asArray(Buffer.alloc(32, 31)),
+          requestHash: asArray(Buffer.alloc(32, 12)),
+          idempotencyKey: asArray(Buffer.alloc(32, 13)),
+          settlementNonce: new BN(++settlementNonce),
+          basketId: asArray(fixture.basketId),
+          expectedCompositionVersion: 1,
+          expectedCompositionHash: asArray(fixture.compositionHash),
+          marketId: "SOL",
+          side: { open: {} },
+          direction: { short: {} }, // composition says long
+          phoenixSubaccount: 1,
+          leverageBps: 30_000,
+          executionWallet,
+          requestedCollateralUnits: new BN(100_000_000),
+          actualMarginPostedUnits: new BN(97_431_255),
+          entryMarkPrice: new BN(95_670_000),
+          fillStatus: { filled: {} },
+          executedAt: new BN(clock.unixTimestamp.toString()),
+          executedSlot: new BN(1),
+          transactionSignature: asArray(Buffer.alloc(64, 4)),
+        })
+        .accountsStrict({
+          config,
+          basket,
+          perpEligibilityList: fixture.perpList,
+          traderRegistry: traderRegistryPda(executionWallet),
+          receipt: perpReceiptPda(Buffer.alloc(32, 31)),
+          backendSigner: backend.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+      await expectRevert([ix], [backend], /PerpDirectionMismatch/);
+    });
+
+    it("rejects a fill whose leverage disagrees with the composition", async () => {
+      const ix = await tradeIx({
+        ...fixture,
+        basket,
+        executionHash: Buffer.alloc(32, 32),
+        leverageBps: 20_000, // composition says 30_000
+      });
+      await expectRevert([ix], [backend], /PerpLeverageMismatch/);
     });
 
     it("rejects a subaccount the composition does not bind", async () => {

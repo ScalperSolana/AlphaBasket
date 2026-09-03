@@ -114,6 +114,12 @@ pub enum EscrowError {
     MarketNotInComposition,
     #[msg("Composition item names a different Phoenix subaccount than the trade")]
     SubaccountMismatch,
+    #[msg("Recorded trade direction does not match the approved composition item")]
+    PerpDirectionMismatch,
+    #[msg("Recorded leverage does not match the approved composition item")]
+    PerpLeverageMismatch,
+    #[msg("A basket holding perpetuals must be perpetual; perps never resolve")]
+    PerpBasketMustBePerpetual,
     #[msg("Trader registry does not belong to this execution wallet")]
     TraderRegistryMismatch,
     #[msg("Phoenix trader PDA index is not the supported user index")]
