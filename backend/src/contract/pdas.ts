@@ -109,3 +109,65 @@ export function deriveReceiptPda(
     programId,
   );
 }
+
+/**
+ * Phoenix perpetual PDAs.
+ *
+ * Every prefix is distinct from the ones the accounting instructions already
+ * use (`config`, `basket`, `eligibility`, `composition_draft`, `position`,
+ * `receipt`, `token_allowlist`, `price_attestation`), so no two account kinds
+ * share a namespace.
+ */
+export function derivePerpEligibilityListPda(
+  listHash: Uint8Array,
+  nonce: bigint,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("perp_eligibility", "ascii"),
+      nonZeroBytes32(listHash, "listHash"),
+      encodeU64LE(nonce, "nonce"),
+    ],
+    programId,
+  );
+}
+
+export function derivePerpTraderRegistryPda(
+  executionWallet: PublicKey,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("perp_trader", "ascii"),
+      nonZeroPublicKeyBytes(executionWallet, "executionWallet"),
+    ],
+    programId,
+  );
+}
+
+export function derivePerpReceiptPda(
+  executionHash: Uint8Array,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("perp_receipt", "ascii"),
+      nonZeroBytes32(executionHash, "executionHash"),
+    ],
+    programId,
+  );
+}
+
+export function derivePerpEventPda(
+  eventHash: Uint8Array,
+  programId: PublicKey = ALPHABASKET_PROGRAM_ID,
+): DerivedPda {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("perp_event", "ascii"),
+      nonZeroBytes32(eventHash, "eventHash"),
+    ],
+    programId,
+  );
+}

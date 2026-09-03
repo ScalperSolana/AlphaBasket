@@ -78,6 +78,14 @@ pub mod polybaskets_escrow {
         instructions::registry::publish_eligibility_list_handler(ctx, args)
     }
 
+    /// Publishes the Composer-screened Phoenix perpetual market list.
+    pub fn publish_perp_eligibility_list(
+        ctx: Context<PublishPerpEligibilityList>,
+        args: PublishPerpEligibilityListArgs,
+    ) -> Result<()> {
+        instructions::registry::publish_perp_eligibility_list_handler(ctx, args)
+    }
+
     /// Publishes a creator-selected weighted composition in a size-safe prior transaction.
     pub fn publish_composition_draft(
         ctx: Context<PublishCompositionDraft>,
@@ -144,6 +152,37 @@ pub mod polybaskets_escrow {
     /// Stops deposits and starts resolution for a non-perpetual basket.
     pub fn begin_resolution(ctx: Context<BackendBasketAction>) -> Result<()> {
         instructions::settlement::begin_resolution_handler(ctx)
+    }
+
+    // --- Phoenix perpetuals ------------------------------------------------
+    //
+    // Recording only. Phoenix trading happens off chain through the Rise SDK;
+    // this program never CPIs into Phoenix. See `instructions/phoenix.rs`.
+
+    /// One-time registration of a Phoenix trader account for an execution wallet.
+    pub fn onboard_trader_account(
+        ctx: Context<OnboardTraderAccount>,
+        args: OnboardTraderAccountArgs,
+    ) -> Result<()> {
+        instructions::phoenix::onboard_trader_account_handler(ctx, args)
+    }
+
+    /// Records an already-executed, vault-delta-verified Phoenix trade and
+    /// updates the composition item it belongs to.
+    pub fn complete_phoenix_trade(
+        ctx: Context<CompletePhoenixTrade>,
+        args: CompletePhoenixTradeArgs,
+    ) -> Result<()> {
+        instructions::phoenix::complete_phoenix_trade_handler(ctx, args)
+    }
+
+    /// Records an autonomous Phoenix event. Callable unprompted, with no prior
+    /// AlphaBasket-initiated request and no matching trade receipt.
+    pub fn attest_perp_event(
+        ctx: Context<AttestPerpEvent>,
+        args: AttestPerpEventArgs,
+    ) -> Result<()> {
+        instructions::phoenix::attest_perp_event_handler(ctx, args)
     }
 
     /// Records the final NAV and share snapshot for deterministic redemptions.

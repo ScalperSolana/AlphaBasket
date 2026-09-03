@@ -7,7 +7,11 @@ import {
   MAX_ELIGIBLE_MARKETS,
   MAX_MARKET_ID_BYTES,
   MAX_MIXED_WEIGHT_BPS,
+  MAX_PERP_ELIGIBLE_MARKETS,
+  MAX_PERP_LEVERAGE_BPS,
   MAX_SINGLE_SOURCE_WEIGHT_BPS,
+  MIN_PERP_LEVERAGE_BPS,
+  PHOENIX_CROSS_SUBACCOUNT_INDEX,
 } from "./constants.js";
 import {
   assertU8,
@@ -29,10 +33,37 @@ export interface SpotPositionKind {
   };
 }
 
+export type PerpDirection = "long" | "short";
+
+export interface PerpPositionKind {
+  readonly perp: {
+    readonly direction: PerpDirection;
+    readonly leverageBps: number;
+    /**
+     * Post-execution figures. Present on the item but **excluded from the
+     * canonical hash**: settlement rewrites both in place, so hashing them would
+     * make the composition hash stop matching the composition after the first
+     * fill. See `canonical_composition_bytes` in `create_basket.rs`.
+     */
+    readonly entryMarkPrice: bigint;
+    readonly marginPosted: bigint;
+    /** Phoenix isolated subaccount. Must be greater than zero. */
+    readonly phoenixSubaccount: number;
+  };
+}
+
 export interface BasketAsset {
   readonly marketId: string;
-  readonly kind: PredictionMarketPositionKind | SpotPositionKind;
+  readonly kind:
+    | PredictionMarketPositionKind
+    | SpotPositionKind
+    | PerpPositionKind;
   readonly weightBps: number;
+}
+
+/** One Phoenix market a Composer has admitted. No weights, no CTF fields. */
+export interface PerpEligibleMarket {
+  readonly marketId: string;
 }
 
 export interface EligibleMarket {
@@ -43,8 +74,13 @@ export interface EligibleMarket {
 
 const isPredictionMarket = (
   kind: BasketAsset["kind"],
-): kind is PredictionMarketPositionKind =>
-  "predictionMarket" in kind;
+): kind is PredictionMarketPositionKind => "predictionMarket" in kind;
+
+const isPerp = (kind: BasketAsset["kind"]): kind is PerpPositionKind =>
+  "perp" in kind;
+
+const isSpot = (kind: BasketAsset["kind"]): kind is SpotPositionKind =>
+  "spot" in kind;
 
 function validateAndEncodeAsset(asset: BasketAsset, weightCapBps: number): Buffer {
   if (typeof asset.marketId !== "string") {
@@ -79,7 +115,35 @@ function validateAndEncodeAsset(asset: BasketAsset, weightCapBps: number): Buffe
       encodeU16LE(weight, "weightBps"),
     ]);
   }
-  const tokenMint = asset.kind?.spot?.tokenMint;
+  if (isPerp(asset.kind)) {
+    const perp = asset.kind.perp;
+    const subaccount = assertU8(perp.phoenixSubaccount, "phoenixSubaccount");
+    if (subaccount === PHOENIX_CROSS_SUBACCOUNT_INDEX) {
+      throw new RangeError(
+        "phoenixSubaccount 0 is Phoenix's cross-margin account and may never hold a position",
+      );
+    }
+    const leverage = assertU16(perp.leverageBps, "leverageBps");
+    if (leverage < MIN_PERP_LEVERAGE_BPS || leverage > MAX_PERP_LEVERAGE_BPS) {
+      throw new RangeError(
+        `leverageBps must be in [${MIN_PERP_LEVERAGE_BPS}, ${MAX_PERP_LEVERAGE_BPS}]`,
+      );
+    }
+    if (perp.direction !== "long" && perp.direction !== "short") {
+      throw new TypeError('perp direction must be "long" or "short"');
+    }
+    // `entryMarkPrice` and `marginPosted` are deliberately not encoded.
+    return Buffer.concat([
+      encodeU16LE(market.length, "marketId length"),
+      market,
+      Buffer.from([2, perp.direction === "short" ? 1 : 0]),
+      encodeU16LE(leverage, "leverageBps"),
+      Buffer.from([subaccount]),
+      encodeU16LE(weight, "weightBps"),
+    ]);
+  }
+
+  const tokenMint = (asset.kind as SpotPositionKind)?.spot?.tokenMint;
   if (!(tokenMint instanceof PublicKey) || tokenMint.equals(PublicKey.default)) {
     throw new TypeError("spot tokenMint must be a non-zero PublicKey");
   }
@@ -108,9 +172,21 @@ export function canonicalCompositionBytes(
   const marketIds = new Set<string>();
   const ctfTokenIds = new Set<string>();
   const spotMints = new Set<string>();
+  const perpSubaccounts = new Set<number>();
   let totalWeight = 0;
   const hasPrediction = items.some((item) => isPredictionMarket(item.kind));
-  const hasSpot = items.some((item) => !isPredictionMarket(item.kind));
+  const hasSpot = items.some((item) => isSpot(item.kind));
+  const hasPerp = items.some((item) => isPerp(item.kind));
+
+  // A perpetual basket is never mixed with spot or prediction markets. Perps
+  // carry leverage and a liquidation price; blending them with unlevered
+  // positions makes the basket's NAV undecomposable.
+  if (hasPerp && (hasPrediction || hasSpot)) {
+    throw new RangeError(
+      "a perpetual basket may not contain spot or prediction-market items",
+    );
+  }
+
   const weightCapBps =
     hasPrediction && hasSpot
       ? MAX_MIXED_WEIGHT_BPS
@@ -118,7 +194,18 @@ export function canonicalCompositionBytes(
 
   for (const item of items) {
     const itemBytes = validateAndEncodeAsset(item, weightCapBps);
-    if (isPredictionMarket(item.kind)) {
+    if (isPerp(item.kind)) {
+      const subaccount = item.kind.perp.phoenixSubaccount;
+      // Two items sharing one isolated subaccount would share collateral, which
+      // is the thing isolation exists to prevent.
+      if (marketIds.has(item.marketId) || perpSubaccounts.has(subaccount)) {
+        throw new RangeError(
+          "composition contains a duplicate perp market or isolated subaccount",
+        );
+      }
+      marketIds.add(item.marketId);
+      perpSubaccounts.add(subaccount);
+    } else if (isPredictionMarket(item.kind)) {
       const ctfKey = Buffer.from(
         item.kind.predictionMarket.ctfTokenId,
       ).toString("hex");
@@ -150,6 +237,53 @@ export function canonicalCompositionBytes(
 
 export function compositionHash(items: readonly BasketAsset[]): Buffer {
   return createHash("sha256").update(canonicalCompositionBytes(items)).digest();
+}
+
+/** Mirrors `canonical_perp_eligibility_bytes` in `registry.rs`. */
+export function canonicalPerpEligibilityBytes(
+  markets: readonly PerpEligibleMarket[],
+): Buffer {
+  if (
+    !Array.isArray(markets) ||
+    markets.length === 0 ||
+    markets.length > MAX_PERP_ELIGIBLE_MARKETS
+  ) {
+    throw new RangeError(
+      `perp eligible list must contain 1-${MAX_PERP_ELIGIBLE_MARKETS} markets`,
+    );
+  }
+  const seen = new Set<string>();
+  const encoded = markets.map((market) => {
+    if (typeof market.marketId !== "string") {
+      throw new TypeError("perp eligible marketId must be a string");
+    }
+    const marketId = Buffer.from(market.marketId, "utf8");
+    if (marketId.length === 0 || marketId.length > MAX_MARKET_ID_BYTES) {
+      throw new RangeError(
+        `perp eligible marketId must contain 1-${MAX_MARKET_ID_BYTES} UTF-8 bytes`,
+      );
+    }
+    if (seen.has(market.marketId)) {
+      throw new RangeError("perp eligible list contains a duplicate market");
+    }
+    seen.add(market.marketId);
+    return Buffer.concat([
+      encodeU16LE(marketId.length, "perp eligible marketId length"),
+      marketId,
+    ]);
+  });
+  return Buffer.concat([
+    encodeU16LE(markets.length, "perp eligible market count"),
+    ...encoded,
+  ]);
+}
+
+export function perpEligibilityHash(
+  markets: readonly PerpEligibleMarket[],
+): Buffer {
+  return createHash("sha256")
+    .update(canonicalPerpEligibilityBytes(markets))
+    .digest();
 }
 
 export function canonicalEligibilityBytes(

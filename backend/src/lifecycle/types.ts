@@ -51,6 +51,16 @@ export interface SignedReconstitution {
   readonly eligibilityHash: Uint8Array;
   readonly eligibilityNonce: bigint;
   readonly eligibleMarkets: readonly EligibleMarket[];
+  /**
+   * The perp allowlist this composition's perpetual items were screened
+   * against. Required when `items` contains a `Perp`, ignored otherwise:
+   * `validate_basket_items` looks the account up through `remaining_accounts`
+   * and refuses a composition whose markets it does not cover.
+   */
+  readonly perpEligibility?: {
+    readonly listHash: Uint8Array;
+    readonly nonce: bigint;
+  };
   readonly items: readonly BasketAsset[];
   readonly compositionNonce: bigint;
   readonly compositionExpirySeconds: bigint;

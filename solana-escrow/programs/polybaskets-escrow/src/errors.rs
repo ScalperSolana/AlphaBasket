@@ -100,4 +100,36 @@ pub enum EscrowError {
     InsufficientProtocolFeeShares,
     #[msg("Arithmetic overflow or underflow")]
     MathOverflow,
+
+    // --- Phoenix perpetuals ------------------------------------------------
+    #[msg("A perpetual basket may not contain spot or prediction-market items")]
+    MixedAssetClassBasket,
+    #[msg("Phoenix subaccount 0 is cross-margin and may never hold a position")]
+    SubaccountZeroNotAllowed,
+    #[msg("Recorded leverage is outside the supported bounds")]
+    PerpLeverageOutOfBounds,
+    #[msg("Perp eligibility list is malformed, stale, or does not match its hash")]
+    InvalidPerpEligibilityList,
+    #[msg("Basket composition contains no perpetual item for this market")]
+    MarketNotInComposition,
+    #[msg("Composition item names a different Phoenix subaccount than the trade")]
+    SubaccountMismatch,
+    #[msg("Trader registry does not belong to this execution wallet")]
+    TraderRegistryMismatch,
+    #[msg("Phoenix trader PDA index is not the supported user index")]
+    UnsupportedTraderPdaIndex,
+    #[msg("Recorded entry mark price must be non-zero when opening a position")]
+    ZeroEntryMarkPrice,
+    #[msg("Recorded margin must be non-zero when opening a position")]
+    ZeroMarginPosted,
+    #[msg("Phoenix execution timestamp is too old to settle")]
+    StalePerpExecution,
+    #[msg("Phoenix event timestamp is too old to attest")]
+    StalePerpAttestation,
+    #[msg("Timestamp is further in the future than clock skew allows")]
+    TimestampInFuture,
+    #[msg("Referenced basket does not match the basket this record belongs to")]
+    MismatchedBasket,
+    #[msg("Market identifier exceeds the maximum supported length")]
+    MarketIdTooLong,
 }

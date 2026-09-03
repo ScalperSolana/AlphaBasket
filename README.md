@@ -144,7 +144,38 @@ Important instructions:
 | `complete_protocol_fee_withdrawal` | Record redemption of protocol-owned shares |
 | `begin_reconstitution` / `complete_reconstitution` | Pause, execute and commit a signed new composition |
 | `begin_resolution` / `record_final_settlement` | Resolve and finalize non-perpetual baskets |
+| `publish_perp_eligibility_list` | Publish the Composer-screened Phoenix perpetual market list |
+| `onboard_trader_account` | One-time registration of a Phoenix trader account for an execution wallet |
+| `complete_phoenix_trade` | Record a vault-delta-verified Phoenix fill and update the composition item |
+| `attest_perp_event` | Record an autonomous Phoenix action (ADL, risk-engine cancellation) |
 | `set_authorities` / `set_limits` / `set_paused` | Admin security controls |
+
+### Perpetual futures (Phoenix)
+
+A basket may hold Phoenix perpetuals through `PositionKind::Perp`. Three rules
+shape the design:
+
+- **Isolated margin only.** Every perpetual item names a Phoenix subaccount
+  greater than zero, and no two items may share one. Subaccount 0 is Phoenix's
+  cross-margin account, where a loss on one position can consume the collateral
+  backing another — which would make a basket share meaningless.
+- **A perpetual basket is never mixed** with spot or prediction markets.
+  Blending levered and unlevered positions makes the basket's NAV
+  undecomposable.
+- **Nothing recorded is a quote.** `complete_phoenix_trade` takes figures the
+  backend read back from real post-execution Phoenix state. The program
+  validates and records; it computes no NAV, no fees and no PnL, and it never
+  CPIs into Phoenix.
+
+`entry_mark_price` and `margin_posted` are deliberately **excluded from
+`canonical_composition_bytes`**. Settlement rewrites both in place as fills land,
+so hashing them would make a basket's `composition_hash` stop matching its
+composition after the very first trade. What the hash covers is exactly what the
+Composer approved and the program never rewrites: market, direction, leverage,
+subaccount and weight.
+
+Because `MAX_SINGLE_SOURCE_WEIGHT_BPS` caps any item at 3000 bps, a fully
+perpetual basket has at least four positions.
 
 Basket composition is not supplied directly by an arbitrary creator. The
 Composer service computes markets, outcomes and weights off-chain, signs the
@@ -163,6 +194,7 @@ Location: `backend/`
 | `composer` | Deterministic filtering, weighting and signed basket composition |
 | `server` | Quote, intent, funding, operation-status and basket APIs |
 | `execution` | Durable operation state machine, allocation and attestations |
+| `phoenix` | Phoenix perpetual units, sizing, market selection and post-execution verification |
 | `deposits` / `withdrawals` | Hybrid bridge, FAK/Jupiter execution and `complete_*` workflows |
 | `gateway` | CLOB/Jupiter signing, Polygon transfers and Solana-mainnet fee distribution |
 | `jupiter` | Verified token admission, Swap V2 execution and Price V3 marks |

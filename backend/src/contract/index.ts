@@ -11,7 +11,12 @@ export {
   MAX_ELIGIBLE_MARKETS,
   MAX_MARKET_ID_BYTES,
   MAX_MIXED_WEIGHT_BPS,
+  MAX_PERP_ELIGIBLE_MARKETS,
+  MAX_PERP_LEVERAGE_BPS,
   MAX_SINGLE_SOURCE_WEIGHT_BPS,
+  MIN_PERP_LEVERAGE_BPS,
+  PHOENIX_CROSS_SUBACCOUNT_INDEX,
+  PHOENIX_USER_PDA_INDEX,
   PRICE_ATTESTATION_DOMAIN,
   RECONSTITUTION_DOMAIN,
   WITHDRAWAL_INTENT_DOMAIN,
@@ -19,6 +24,7 @@ export {
 export * from "./hashes.js";
 export * from "./messages.js";
 export * from "./pdas.js";
+export * from "./registry-accounts.js";
 export {
   assertI64,
   assertU8,
