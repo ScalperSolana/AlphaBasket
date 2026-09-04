@@ -47,6 +47,9 @@ const basketAccountSchema = z.object({
     kind: z.union([
       z.object({ predictionMarket: z.unknown() }).passthrough(),
       z.object({ spot: z.unknown() }).passthrough(),
+      // Without this a basket holding a perpetual fails validation and vanishes
+      // from every quote path rather than erroring visibly.
+      z.object({ perp: z.unknown() }).passthrough(),
     ]),
   }).passthrough()).min(1).max(16),
 }).passthrough();
