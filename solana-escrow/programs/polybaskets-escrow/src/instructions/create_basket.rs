@@ -7,13 +7,14 @@ use sha2::{Digest, Sha256};
 use crate::constants::{
     COMPOSITION_DOMAIN, DEFAULT_CREATOR_PERFORMANCE_FEE_BPS, ED25519_ID, MAX_BASKET_ITEMS, MAX_BPS,
     MAX_CREATOR_PERFORMANCE_FEE_BPS, MAX_MARKET_ID_LEN, MAX_MIXED_WEIGHT_BPS,
-    MAX_SINGLE_SOURCE_WEIGHT_BPS,
+    MAX_PERP_LEVERAGE_BPS, MAX_SINGLE_SOURCE_WEIGHT_BPS, MIN_PERP_LEVERAGE_BPS,
+    PHOENIX_CROSS_SUBACCOUNT_INDEX,
 };
 use crate::errors::EscrowError;
 use crate::events::BasketCreated;
 use crate::state::{
     Basket, BasketAsset, BasketStatus, CompositionDraft, Config, CreateBasketArgs, EligibilityList,
-    PositionKind, TokenAllowlist,
+    PerpDirection, PerpEligibilityList, PositionKind, TokenAllowlist,
 };
 
 #[derive(Accounts)]
@@ -109,6 +110,7 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
         &ctx.accounts.composition_draft.items,
         &ctx.accounts.eligibility_list,
         ctx.remaining_accounts,
+        args.is_perpetual,
     )?;
     let composition_bytes = canonical_composition_bytes(&ctx.accounts.composition_draft.items)?;
     require!(
@@ -163,10 +165,17 @@ pub fn create_basket_handler(ctx: Context<CreateBasket>, args: CreateBasketArgs)
     Ok(())
 }
 
+/// Validates a composition.
+///
+/// `extra_accounts` carries the registries only some asset classes need, in a
+/// fixed order: the `TokenAllowlist` first when the basket holds spot, then the
+/// `PerpEligibilityList` when it holds perpetuals. The length must match exactly,
+/// so a caller cannot pass an unrelated account and have it ignored.
 pub(crate) fn validate_basket_items(
     items: &[BasketAsset],
     eligibility_list: &EligibilityList,
-    spot_allowlist_accounts: &[AccountInfo],
+    extra_accounts: &[AccountInfo],
+    is_perpetual: bool,
 ) -> Result<()> {
     require!(
         !items.is_empty() && items.len() <= MAX_BASKET_ITEMS,
@@ -179,6 +188,28 @@ pub(crate) fn validate_basket_items(
     let has_spot = items
         .iter()
         .any(|item| matches!(&item.kind, PositionKind::Spot { .. }));
+    let has_perp = items.iter().any(|item| item.kind.is_perp());
+
+    // A perpetual basket is never mixed with spot or prediction markets. Perps
+    // carry leverage and a liquidation price; blending them with unlevered
+    // positions would make a single basket share mean two different things about
+    // risk, and the NAV of the mixed basket would not be decomposable.
+    require!(
+        !(has_perp && (has_prediction || has_spot)),
+        EscrowError::MixedAssetClassBasket
+    );
+
+    // A perpetual position has no resolution date, so a basket holding one can
+    // never be resolved and must reconstitute on a cadence instead. Without this
+    // a perp basket created with `is_perpetual = false` could reach
+    // `begin_resolution`, which would move it to `Resolving` and then
+    // `Redeemable` against a final NAV, while the underlying Phoenix positions
+    // were still open and still moving.
+    require!(
+        !has_perp || is_perpetual,
+        EscrowError::PerpBasketMustBePerpetual
+    );
+
     let weight_cap = if has_prediction && has_spot {
         MAX_MIXED_WEIGHT_BPS
     } else {
@@ -191,9 +222,18 @@ pub(crate) fn validate_basket_items(
         );
     }
     require!(
-        spot_allowlist_accounts.len() == usize::from(has_spot),
+        extra_accounts.len() == usize::from(has_spot) + usize::from(has_perp),
         EscrowError::TokenNotAllowlisted
     );
+    let perp_eligibility = if has_perp {
+        Some(load_perp_eligibility_account(
+            extra_accounts
+                .last()
+                .ok_or(EscrowError::InvalidPerpEligibilityList)?,
+        )?)
+    } else {
+        None
+    };
 
     let mut total_weight: u32 = 0;
     for (index, item) in items.iter().enumerate() {
@@ -231,10 +271,36 @@ pub(crate) fn validate_basket_items(
                     *token_mint != Pubkey::default(),
                     EscrowError::InvalidBasketItems
                 );
-                let account = spot_allowlist_accounts
+                let account = extra_accounts
                     .first()
                     .ok_or(EscrowError::TokenNotAllowlisted)?;
                 validate_spot_allowlist_account(account, token_mint)?;
+            }
+            PositionKind::Perp {
+                leverage_bps,
+                phoenix_subaccount,
+                ..
+            } => {
+                // Isolated margin only. Phoenix's subaccount 0 is the shared
+                // cross-margin account: a loss there can consume collateral
+                // backing an unrelated position, which breaks the invariant that
+                // every basket item is independently valuable.
+                require!(
+                    *phoenix_subaccount != PHOENIX_CROSS_SUBACCOUNT_INDEX,
+                    EscrowError::SubaccountZeroNotAllowed
+                );
+                require!(
+                    *leverage_bps >= MIN_PERP_LEVERAGE_BPS
+                        && *leverage_bps <= MAX_PERP_LEVERAGE_BPS,
+                    EscrowError::PerpLeverageOutOfBounds
+                );
+                let list = perp_eligibility
+                    .as_ref()
+                    .ok_or(EscrowError::InvalidPerpEligibilityList)?;
+                require!(
+                    list.contains(&item.market_id),
+                    EscrowError::MarketNotEligible
+                );
             }
         }
 
@@ -260,6 +326,22 @@ pub(crate) fn validate_basket_items(
                 ) => {
                     require!(
                         token_mint != other_token_mint,
+                        EscrowError::InvalidBasketItems
+                    );
+                }
+                (
+                    PositionKind::Perp {
+                        phoenix_subaccount, ..
+                    },
+                    PositionKind::Perp {
+                        phoenix_subaccount: other_subaccount,
+                        ..
+                    },
+                ) => {
+                    // Two items sharing one isolated subaccount would share
+                    // collateral, which is the thing isolation exists to prevent.
+                    require!(
+                        item.market_id != other.market_id && phoenix_subaccount != other_subaccount,
                         EscrowError::InvalidBasketItems
                     );
                 }
@@ -300,6 +382,30 @@ pub(crate) fn canonical_composition_bytes(items: &[BasketAsset]) -> Result<Vec<u
                 bytes.push(1);
                 bytes.extend_from_slice(token_mint.as_ref());
             }
+            PositionKind::Perp {
+                direction,
+                leverage_bps,
+                phoenix_subaccount,
+                // `entry_mark_price` and `margin_posted` are deliberately absent.
+                //
+                // They are *state*, not composition: `complete_phoenix_trade`
+                // writes both in place as fills land. Hashing them would mean the
+                // composition hash stopped matching the composition after the
+                // first trade, and every later reconstitution would be comparing
+                // against a hash that no longer described anything.
+                //
+                // What remains is exactly what the Composer approved and nothing
+                // this program ever rewrites.
+                ..
+            } => {
+                bytes.push(2);
+                bytes.push(match direction {
+                    PerpDirection::Long => 0,
+                    PerpDirection::Short => 1,
+                });
+                bytes.extend_from_slice(&leverage_bps.to_le_bytes());
+                bytes.push(*phoenix_subaccount);
+            }
         }
         bytes.extend_from_slice(&item.weight_bps.to_le_bytes());
     }
@@ -339,6 +445,45 @@ fn validate_spot_allowlist_account(account: &AccountInfo, token_mint: &Pubkey) -
         EscrowError::TokenNotAllowlisted
     );
     Ok(())
+}
+
+/// Loads and checks a `PerpEligibilityList` passed through `remaining_accounts`.
+///
+/// Mirrors `validate_spot_allowlist_account`: prove the owner, prove the address
+/// is the real PDA for the list's own hash and nonce, then deserialize. Without
+/// the address check a caller could hand over any account of the right shape.
+fn load_perp_eligibility_account(account: &AccountInfo) -> Result<PerpEligibilityList> {
+    require_keys_eq!(
+        *account.owner,
+        crate::ID,
+        EscrowError::InvalidPerpEligibilityList
+    );
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| error!(EscrowError::InvalidPerpEligibilityList))?;
+    let list = PerpEligibilityList::try_deserialize(&mut data.as_ref())
+        .map_err(|_| error!(EscrowError::InvalidPerpEligibilityList))?;
+
+    let (expected, _) = Pubkey::find_program_address(
+        &[
+            b"perp_eligibility",
+            list.list_hash.as_ref(),
+            list.nonce.to_le_bytes().as_ref(),
+        ],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        account.key(),
+        expected,
+        EscrowError::InvalidPerpEligibilityList
+    );
+
+    let now = Clock::get()?.unix_timestamp;
+    require!(
+        list.published_at <= now && list.expires_at > now,
+        EscrowError::InvalidPerpEligibilityList
+    );
+    Ok(list)
 }
 
 pub(crate) fn verify_composer_signature(

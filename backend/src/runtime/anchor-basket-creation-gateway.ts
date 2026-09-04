@@ -13,7 +13,7 @@ import {
   deriveCompositionDraftPda,
   deriveConfigPda,
   deriveEligibilityListPda,
-  deriveTokenAllowlistPda,
+  registryAccountsForComposition,
 } from "../contract/index.js";
 import type { PolybasketsEscrow } from "../contract/generated/polybaskets_escrow.js";
 import type {
@@ -110,16 +110,13 @@ export class AnchorBasketCreationGateway
       request.payload.compositionNonce,
       this.program.programId,
     );
-    const hasSpot = request.payload.composition.assets.some(
-      (asset) => "spot" in asset.kind,
+    const spotAllowlistAccounts = registryAccountsForComposition(
+      request.payload.composition.assets,
+      {
+        programId: this.program.programId,
+        perpEligibility: request.payload.perpEligibility,
+      },
     );
-    const spotAllowlistAccounts = hasSpot
-      ? [{
-          pubkey: deriveTokenAllowlistPda(this.program.programId)[0],
-          isSigner: false,
-          isWritable: false,
-        }]
-      : [];
     const existingDraft = await this.program.provider.connection.getAccountInfo(
       compositionDraft,
       "confirmed",
@@ -144,7 +141,20 @@ export class AnchorBasketCreationGateway
                       ctfTokenId: [...asset.kind.predictionMarket.ctfTokenId],
                     },
                   }
-                : { spot: { tokenMint: asset.kind.spot.tokenMint } },
+                : "perp" in asset.kind
+                  ? {
+                      perp: {
+                        direction:
+                          asset.kind.perp.direction === "short"
+                            ? { short: {} }
+                            : { long: {} },
+                        leverageBps: asset.kind.perp.leverageBps,
+                        entryMarkPrice: asset.kind.perp.entryMarkPrice,
+                        marginPosted: asset.kind.perp.marginPosted,
+                        phoenixSubaccount: asset.kind.perp.phoenixSubaccount,
+                      },
+                    }
+                  : { spot: { tokenMint: asset.kind.spot.tokenMint } },
             weightBps: asset.weightBps,
           })),
         })

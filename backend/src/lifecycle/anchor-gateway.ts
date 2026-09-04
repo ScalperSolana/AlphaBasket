@@ -12,7 +12,7 @@ import {
   deriveCompositionDraftPda,
   deriveConfigPda,
   deriveEligibilityListPda,
-  deriveTokenAllowlistPda,
+  registryAccountsForComposition,
   eligibilityHash as hashEligibility,
   reconstitutionAuthorizationMessage,
 } from "../contract/index.js";
@@ -177,14 +177,10 @@ export class AnchorLifecycleGateway implements LifecycleSolanaGatewayPort {
     } else if (!existingEligibility.owner.equals(this.program.programId)) {
       throw new Error("reconstitution eligibility PDA has an unexpected owner");
     }
-    const hasSpot = request.items.some((item) => "spot" in item.kind);
-    const spotAllowlistAccounts = hasSpot
-      ? [{
-          pubkey: deriveTokenAllowlistPda(this.program.programId)[0],
-          isSigner: false,
-          isWritable: false,
-        }]
-      : [];
+    const spotAllowlistAccounts = registryAccountsForComposition(request.items, {
+      programId: this.program.programId,
+      perpEligibility: request.perpEligibility,
+    });
     const [compositionDraft] = deriveCompositionDraftPda(
       suppliedCompositionHash,
       request.compositionNonce,
@@ -212,7 +208,20 @@ export class AnchorLifecycleGateway implements LifecycleSolanaGatewayPort {
                       ctfTokenId: [...item.kind.predictionMarket.ctfTokenId],
                     },
                   }
-                : { spot: { tokenMint: item.kind.spot.tokenMint } },
+                : "perp" in item.kind
+                  ? {
+                      perp: {
+                        direction:
+                          item.kind.perp.direction === "short"
+                            ? { short: {} }
+                            : { long: {} },
+                        leverageBps: item.kind.perp.leverageBps,
+                        entryMarkPrice: item.kind.perp.entryMarkPrice,
+                        marginPosted: item.kind.perp.marginPosted,
+                        phoenixSubaccount: item.kind.perp.phoenixSubaccount,
+                      },
+                    }
+                  : { spot: { tokenMint: item.kind.spot.tokenMint } },
             weightBps: item.weightBps,
           })),
         })

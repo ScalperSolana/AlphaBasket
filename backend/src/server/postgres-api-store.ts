@@ -206,6 +206,18 @@ export class PostgresQuoteContextStore implements QuoteContextPort {
         if (!Number.isSafeInteger(weightBps) || weightBps <= 0 || weightBps > 4_000) {
           throw new TypeError("indexed basket execution weight is invalid");
         }
+        if ("perp" in item.kind) {
+          // Perpetual legs are opened and closed through the Phoenix gateway
+          // against an isolated subaccount, not through the deposit/withdrawal
+          // execution planner this feeds. Labelling one "prediction_market",
+          // which is what the two-way branch below used to do, would route it
+          // to Polymarket.
+          throw new ApiRequestError(
+            422,
+            "perp_basket_unsupported",
+            "perpetual baskets are not routed through this execution path",
+          );
+        }
         return Object.freeze({
           kind: "spot" in item.kind ? "spot" as const : "prediction_market" as const,
           weightBps,

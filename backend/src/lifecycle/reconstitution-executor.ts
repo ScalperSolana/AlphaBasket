@@ -494,6 +494,12 @@ export class PolymarketReconstitutionExecutor implements ReconstitutionExecution
     }
 
     const targetByToken = new Map(request.nextComposition.items.map((item) => {
+      if ("perp" in item.kind) {
+        throw new Error(
+          `basket item ${item.marketId} is a perpetual; perp reconstitution is ` +
+            "not routed through this executor",
+        );
+      }
       if (!("predictionMarket" in item.kind)) throw new Error("unexpected spot target");
       const tokenId = tokenIdFromBytes(item.kind.predictionMarket.ctfTokenId);
       return [
@@ -700,6 +706,20 @@ export class PolymarketReconstitutionExecutor implements ReconstitutionExecution
           }),
         );
         continue;
+      }
+      if ("perp" in item.kind) {
+        // Perpetual legs are executed through the Phoenix gateway, not through
+        // the Polymarket/Jupiter planner below: they are opened and closed with
+        // `complete_phoenix_trade` against an isolated Phoenix subaccount and
+        // hold no CTF token or SPL mint this planner could rebalance.
+        //
+        // Failing loudly rather than skipping. A silent skip would report a
+        // successful reconstitution while leaving every perp leg at its old
+        // weight, which is worse than not reconstituting at all.
+        throw new Error(
+          `basket ${basketId} contains a perpetual item (${item.marketId}); ` +
+            "perp reconstitution is not routed through this executor",
+        );
       }
       const tokenId = item.kind.spot.tokenMint.toBase58();
       targetByKey.set(

@@ -221,6 +221,15 @@ export class PostgresFinancialExecutionContext implements FinancialExecutionCont
       }
       const holdingByToken = new Map(holdingsResult.rows.map((holding) => [holding.token_id, holding]));
       const targets = decodedBasket.items.map((item): ExecutionTargetState => {
+        if ("perp" in item.kind) {
+          // Would otherwise fail both parses below and surface as "position kind
+          // is malformed", which sends the reader looking for corrupt data
+          // rather than an unrouted asset class.
+          throw new TypeError(
+            `basket item ${item.marketId} is a perpetual; perp execution is not ` +
+              "routed through this runner",
+          );
+        }
         const parsedPrediction = predictionMarket.safeParse(item.kind.predictionMarket);
         const parsedSpot = spot.safeParse(item.kind.spot);
         const isPrediction = parsedPrediction.success;

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::{
     MAX_ALLOWLISTED_TOKENS, MAX_BASKET_ITEMS, MAX_ELIGIBLE_MARKETS, MAX_MARKET_ID_LEN,
-    POSITION_RESERVED_BYTES, REGISTRY_RESERVED_BYTES,
+    MAX_PERP_ELIGIBLE_MARKETS, POSITION_RESERVED_BYTES, REGISTRY_RESERVED_BYTES,
 };
 
 #[account]
@@ -46,11 +46,50 @@ pub enum WithdrawalKind {
     Final,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
+/// Direction of a perpetual position.
+///
+/// A dedicated enum rather than a bool or a signed size: a bool has no natural
+/// reading ("true" is not obviously long), and a signed magnitude conflates
+/// direction with size, so a zero-size position would have no direction at all.
+pub enum PerpDirection {
+    Long,
+    Short,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 /// Tagged representation of a supported basket position.
+///
+/// Adding `Perp` does not change `PositionKind::INIT_SPACE`: the variant is 20
+/// bytes against `PredictionMarket`'s 33, so the maximum is unchanged and no
+/// existing `Basket` or `CompositionDraft` needs a realloc.
 pub enum PositionKind {
-    PredictionMarket { outcome: u8, ctf_token_id: [u8; 32] },
-    Spot { token_mint: Pubkey },
+    PredictionMarket {
+        outcome: u8,
+        ctf_token_id: [u8; 32],
+    },
+    Spot {
+        token_mint: Pubkey,
+    },
+    /// A Phoenix perpetual. `entry_mark_price` and `margin_posted` are the only
+    /// fields a settlement updates, and both are read back from real
+    /// post-execution Phoenix state rather than from a quote.
+    Perp {
+        direction: PerpDirection,
+        leverage_bps: u16,
+        entry_mark_price: u64,
+        margin_posted: u64,
+        /// Phoenix isolated subaccount index. Always greater than zero;
+        /// subaccount 0 is Phoenix's cross-margin account and is never used to
+        /// hold a position.
+        phoenix_subaccount: u8,
+    },
+}
+
+impl PositionKind {
+    pub fn is_perp(&self) -> bool {
+        matches!(self, PositionKind::Perp { .. })
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
@@ -84,6 +123,43 @@ pub struct EligibilityList {
     #[max_len(MAX_ELIGIBLE_MARKETS)]
     pub markets: Vec<EligibleMarket>,
     pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+/// One Phoenix perpetual market the Composer has admitted.
+///
+/// Deliberately not `EligibleMarket`: that type's `outcome` and `ctf_token_id`
+/// are Polymarket/CTF fields with no meaning for a perpetual, and spot has its own
+/// `TokenAllowlist`. Weights are absent for the same reason as `EligibleMarket` —
+/// creators choose them after eligibility is signed.
+pub struct PerpEligibleMarket {
+    /// Phoenix market symbol, e.g. "SOL". Read live from Phoenix exchange metadata.
+    #[max_len(MAX_MARKET_ID_LEN)]
+    pub market_id: String,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Short-lived Composer-published perpetual market list, the perp counterpart to
+/// `EligibilityList`. Seeded at `b"perp_eligibility"` so it cannot collide with
+/// the prediction-market list at `b"eligibility"`.
+pub struct PerpEligibilityList {
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub composer: Pubkey,
+    pub published_at: i64,
+    pub expires_at: i64,
+    #[max_len(MAX_PERP_ELIGIBLE_MARKETS)]
+    pub markets: Vec<PerpEligibleMarket>,
+    pub bump: u8,
+}
+
+impl PerpEligibilityList {
+    pub fn contains(&self, market_id: &str) -> bool {
+        self.markets
+            .iter()
+            .any(|market| market.market_id == market_id)
+    }
 }
 
 #[account]
@@ -251,6 +327,184 @@ pub struct SettlementReceipt {
     pub settlement_nonce: u64,
     pub settled_at: i64,
     pub bump: u8,
+}
+
+// ---------------------------------------------------------------------------
+// Phoenix perpetuals
+//
+// Every account below is created with `init`, never `init_if_needed`, and keyed
+// on the hash of the specific execution, event, or wallet. That is the replay
+// protection: a second attempt to record the same thing fails in the runtime
+// before any handler code runs.
+// ---------------------------------------------------------------------------
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
+/// Whether a recorded Phoenix trade opened or closed a position.
+pub enum PerpTradeSide {
+    Open,
+    Close,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
+/// Outcome of a Phoenix execution, derived from post-execution position state.
+///
+/// There is deliberately no `Rejected` variant. A rejected order posted no margin
+/// and opened no position, so there is nothing to settle: the backend surfaces it
+/// as a failure and never reaches `complete_phoenix_trade`. Accepting `Rejected`
+/// here would create a receipt asserting a trade happened when it did not.
+pub enum PerpFillStatus {
+    Filled,
+    PartiallyFilled,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
+/// The kind of unprompted action Phoenix took on a position.
+///
+/// Phoenix's own wire names are `adl` and `risk_engine_cancel_order`.
+pub enum PerpEventKind {
+    /// Auto-deleveraging: forcible reduction of a *profitable* counterparty's
+    /// position. Distinct from liquidation, which closes the risky account.
+    Adl,
+    /// Phoenix cancelled a risk-increasing resting order before liquidating.
+    AutonomousCancel,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Proof that an execution wallet was onboarded to Phoenix exactly once.
+/// Seeds: `[b"perp_trader", execution_wallet]`.
+pub struct TraderAccountRegistry {
+    pub execution_wallet: Pubkey,
+    pub phoenix_trader_pda: Pubkey,
+    pub phoenix_pda_index: u8,
+    pub onboarded_at: i64,
+    pub onboarding_signature: [u8; 64],
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Immutable record of one already-executed Phoenix trade.
+/// Seeds: `[b"perp_receipt", execution_hash]`.
+///
+/// Named and seeded apart from `SettlementReceipt`, which records accounting
+/// settlements at `[b"receipt", execution_batch_hash]` and has an unrelated shape.
+pub struct PerpSettlementReceipt {
+    pub execution_hash: [u8; 32],
+    pub request_hash: [u8; 32],
+    pub idempotency_key: [u8; 32],
+    pub basket: Pubkey,
+    pub execution_wallet: Pubkey,
+    #[max_len(MAX_MARKET_ID_LEN)]
+    pub market_id: String,
+    pub side: PerpTradeSide,
+    pub direction: PerpDirection,
+    pub fill_status: PerpFillStatus,
+    pub phoenix_subaccount: u8,
+    pub leverage_bps: u16,
+    pub requested_collateral_units: u64,
+    /// Read from post-execution Phoenix state, never from a quote.
+    pub actual_margin_posted_units: u64,
+    /// Read from post-execution Phoenix state, never from a quote.
+    pub entry_mark_price: u64,
+    pub settlement_nonce: u64,
+    pub executed_at: i64,
+    pub executed_slot: u64,
+    pub recorded_at: i64,
+    pub recorded_slot: u64,
+    pub transaction_signature: [u8; 64],
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+/// Record of an autonomous Phoenix action against a basket position.
+/// Seeds: `[b"perp_event", event_hash]`.
+pub struct PerpEventAttestation {
+    pub event_hash: [u8; 32],
+    pub basket: Pubkey,
+    pub event_kind: PerpEventKind,
+    #[max_len(MAX_MARKET_ID_LEN)]
+    pub market_id: String,
+    pub phoenix_subaccount: u8,
+    /// Hash of the full Phoenix event payload, which is too large and too
+    /// venue-specific to store on chain.
+    pub detail_hash: [u8; 32],
+    pub observed_at: i64,
+    pub observed_slot: u64,
+    pub recorded_at: i64,
+    pub recorded_slot: u64,
+    pub attestation_nonce: u64,
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PublishPerpEligibilityListArgs {
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub expires_at: i64,
+    pub markets: Vec<PerpEligibleMarket>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+/// One-time Phoenix onboarding record for an execution wallet.
+pub struct OnboardTraderAccountArgs {
+    pub execution_wallet: Pubkey,
+    pub phoenix_trader_pda: Pubkey,
+    pub phoenix_pda_index: u8,
+    pub onboarded_at: i64,
+    pub onboarding_signature: [u8; 64],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+/// An already-executed, vault-delta-verified Phoenix trade.
+///
+/// Every figure was computed off chain and read back from real post-execution
+/// Phoenix state. This program validates and records; it computes no NAV, no fees
+/// and no PnL.
+pub struct CompletePhoenixTradeArgs {
+    pub execution_hash: [u8; 32],
+    pub request_hash: [u8; 32],
+    pub idempotency_key: [u8; 32],
+    pub settlement_nonce: u64,
+    pub basket_id: [u8; 32],
+    /// Bound the same way `complete_deposit` binds: the basket's live
+    /// `composition_version`. The hash is checked as well, because unlike a
+    /// deposit this instruction writes into `items`.
+    pub expected_composition_version: u32,
+    pub expected_composition_hash: [u8; 32],
+    #[allow(clippy::doc_markdown)]
+    /// Phoenix market symbol, read live from exchange metadata by the backend.
+    pub market_id: String,
+    pub side: PerpTradeSide,
+    pub direction: PerpDirection,
+    pub phoenix_subaccount: u8,
+    pub leverage_bps: u16,
+    pub execution_wallet: Pubkey,
+    pub requested_collateral_units: u64,
+    /// Collateral actually resident in the isolated subaccount after execution.
+    pub actual_margin_posted_units: u64,
+    /// Entry price of the resulting position. Zero means "no position left to
+    /// price" and is accepted only on a close.
+    pub entry_mark_price: u64,
+    pub fill_status: PerpFillStatus,
+    pub executed_at: i64,
+    pub executed_slot: u64,
+    pub transaction_signature: [u8; 64],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+/// An autonomous Phoenix action. Callable unprompted, with no matching trade.
+pub struct AttestPerpEventArgs {
+    pub event_hash: [u8; 32],
+    pub basket_id: [u8; 32],
+    pub event_kind: PerpEventKind,
+    pub market_id: String,
+    pub phoenix_subaccount: u8,
+    pub detail_hash: [u8; 32],
+    pub observed_at: i64,
+    pub observed_slot: u64,
+    pub attestation_nonce: u64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]

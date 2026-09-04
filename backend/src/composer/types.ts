@@ -136,6 +136,21 @@ export interface CompositionSigningPayload {
   readonly compositionNonce: bigint;
   readonly compositionExpiry: bigint;
   readonly eligibilityNonce: bigint;
+  /**
+   * The perp allowlist this composition's perpetual items were screened
+   * against. Required when the composition contains a `Perp`, ignored
+   * otherwise: `validate_basket_items` looks the account up through
+   * `remaining_accounts` and refuses a composition whose markets it does not
+   * cover.
+   *
+   * Deliberately not part of the signed message. The Composer signs the
+   * composition, and `create_basket` re-derives the list PDA from this account's
+   * own hash and nonce, so a substituted list cannot pass the seed check.
+   */
+  readonly perpEligibility?: {
+    readonly listHash: Uint8Array;
+    readonly nonce: bigint;
+  };
   readonly composition: BasketComposition;
 }
 

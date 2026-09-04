@@ -117,6 +117,125 @@ export type PolybasketsEscrow = {
       "args": []
     },
     {
+      "name": "attestPerpEvent",
+      "docs": [
+        "Records an autonomous Phoenix event. Callable unprompted, with no prior",
+        "AlphaBasket-initiated request and no matching trade receipt."
+      ],
+      "discriminator": [
+        241,
+        109,
+        28,
+        2,
+        97,
+        151,
+        83,
+        199
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "docs": [
+            "Read-only. An autonomous event changes Phoenix's view of the position, but",
+            "this program has no verified post-event margin or entry price to write —",
+            "those come from a vault-delta read, which only the settlement path performs."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestation",
+          "docs": [
+            "`init`, never `init_if_needed`: the same event observed twice — over both",
+            "the trader-state stream and the notification stream, for instance —",
+            "records once."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.event_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backendSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "attestPerpEventArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "beginReconstitution",
       "docs": [
         "Moves an eligible perpetual basket into reconstitution."
@@ -431,6 +550,202 @@ export type PolybasketsEscrow = {
           "type": {
             "defined": {
               "name": "completeDepositArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "completePhoenixTrade",
+      "docs": [
+        "Records an already-executed, vault-delta-verified Phoenix trade and",
+        "updates the composition item it belongs to."
+      ],
+      "discriminator": [
+        233,
+        102,
+        47,
+        149,
+        53,
+        242,
+        71,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "basket",
+          "docs": [
+            "Mutable, but only one item's fields move.",
+            "",
+            "`Basket.items` is the live composition. A settlement finds the one `Perp`",
+            "item for its market and updates that item in place; `composition_hash`,",
+            "`composition_version` and every other item are left exactly as they were,",
+            "because a fill is not a composition change.",
+            "",
+            "Boxed: `Account<'info, T>` holds its deserialized `T` in the instruction's",
+            "stack frame, and a 16-item composition does not fit in 4096 bytes",
+            "alongside the rest of this context."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  115,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "basket.basket_id",
+                "account": "basket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "perpEligibilityList",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "perp_eligibility_list.list_hash",
+                "account": "perpEligibilityList"
+              },
+              {
+                "kind": "account",
+                "path": "perp_eligibility_list.nonce",
+                "account": "perpEligibilityList"
+              }
+            ]
+          }
+        },
+        {
+          "name": "traderRegistry",
+          "docs": [
+            "Proves the execution wallet was onboarded to Phoenix exactly once."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "receipt",
+          "docs": [
+            "`init`, never `init_if_needed`: a second attempt to record the same",
+            "execution fails in the runtime."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  114,
+                  101,
+                  99,
+                  101,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backendSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "completePhoenixTradeArgs"
             }
           }
         }
@@ -1054,6 +1369,96 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "onboardTraderAccount",
+      "docs": [
+        "One-time registration of a Phoenix trader account for an execution wallet."
+      ],
+      "discriminator": [
+        177,
+        209,
+        141,
+        143,
+        78,
+        228,
+        138,
+        86
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "registry",
+          "docs": [
+            "`init`, never `init_if_needed`: onboarding the same wallet twice fails in",
+            "the runtime, which is the guarantee this account exists to provide."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.execution_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "backendSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "onboardTraderAccountArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "proposeAdmin",
       "docs": [
         "Starts the two-step administrator transfer."
@@ -1315,6 +1720,101 @@ export type PolybasketsEscrow = {
           "type": {
             "defined": {
               "name": "publishEligibilityListArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "publishPerpEligibilityList",
+      "docs": [
+        "Publishes the Composer-screened Phoenix perpetual market list."
+      ],
+      "discriminator": [
+        254,
+        240,
+        153,
+        106,
+        61,
+        79,
+        158,
+        54
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "perpEligibilityList",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  114,
+                  112,
+                  95,
+                  101,
+                  108,
+                  105,
+                  103,
+                  105,
+                  98,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.list_hash"
+              },
+              {
+                "kind": "arg",
+                "path": "args.nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "composerSigner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "publishPerpEligibilityListArgs"
             }
           }
         }
@@ -1825,6 +2325,45 @@ export type PolybasketsEscrow = {
       ]
     },
     {
+      "name": "perpEligibilityList",
+      "discriminator": [
+        167,
+        84,
+        26,
+        68,
+        166,
+        155,
+        212,
+        120
+      ]
+    },
+    {
+      "name": "perpEventAttestation",
+      "discriminator": [
+        149,
+        164,
+        45,
+        49,
+        133,
+        96,
+        189,
+        65
+      ]
+    },
+    {
+      "name": "perpSettlementReceipt",
+      "discriminator": [
+        215,
+        212,
+        224,
+        53,
+        178,
+        180,
+        200,
+        46
+      ]
+    },
+    {
       "name": "position",
       "discriminator": [
         170,
@@ -1874,6 +2413,19 @@ export type PolybasketsEscrow = {
         22,
         0,
         239
+      ]
+    },
+    {
+      "name": "traderAccountRegistry",
+      "discriminator": [
+        83,
+        171,
+        45,
+        107,
+        199,
+        186,
+        97,
+        152
       ]
     }
   ],
@@ -2071,6 +2623,58 @@ export type PolybasketsEscrow = {
         103,
         90,
         105
+      ]
+    },
+    {
+      "name": "perpEligibilityListPublished",
+      "discriminator": [
+        188,
+        80,
+        101,
+        206,
+        41,
+        226,
+        159,
+        45
+      ]
+    },
+    {
+      "name": "perpEventAttested",
+      "discriminator": [
+        138,
+        78,
+        24,
+        59,
+        115,
+        94,
+        35,
+        161
+      ]
+    },
+    {
+      "name": "phoenixTradeSettled",
+      "discriminator": [
+        151,
+        90,
+        83,
+        164,
+        163,
+        71,
+        152,
+        107
+      ]
+    },
+    {
+      "name": "phoenixTraderOnboarded",
+      "discriminator": [
+        176,
+        50,
+        116,
+        255,
+        97,
+        239,
+        20,
+        40
       ]
     },
     {
@@ -2371,6 +2975,96 @@ export type PolybasketsEscrow = {
       "code": 6048,
       "name": "mathOverflow",
       "msg": "Arithmetic overflow or underflow"
+    },
+    {
+      "code": 6049,
+      "name": "mixedAssetClassBasket",
+      "msg": "A perpetual basket may not contain spot or prediction-market items"
+    },
+    {
+      "code": 6050,
+      "name": "subaccountZeroNotAllowed",
+      "msg": "Phoenix subaccount 0 is cross-margin and may never hold a position"
+    },
+    {
+      "code": 6051,
+      "name": "perpLeverageOutOfBounds",
+      "msg": "Recorded leverage is outside the supported bounds"
+    },
+    {
+      "code": 6052,
+      "name": "invalidPerpEligibilityList",
+      "msg": "Perp eligibility list is malformed, stale, or does not match its hash"
+    },
+    {
+      "code": 6053,
+      "name": "marketNotInComposition",
+      "msg": "Basket composition contains no perpetual item for this market"
+    },
+    {
+      "code": 6054,
+      "name": "subaccountMismatch",
+      "msg": "Composition item names a different Phoenix subaccount than the trade"
+    },
+    {
+      "code": 6055,
+      "name": "perpDirectionMismatch",
+      "msg": "Recorded trade direction does not match the approved composition item"
+    },
+    {
+      "code": 6056,
+      "name": "perpLeverageMismatch",
+      "msg": "Recorded leverage does not match the approved composition item"
+    },
+    {
+      "code": 6057,
+      "name": "perpBasketMustBePerpetual",
+      "msg": "A basket holding perpetuals must be perpetual; perps never resolve"
+    },
+    {
+      "code": 6058,
+      "name": "traderRegistryMismatch",
+      "msg": "Trader registry does not belong to this execution wallet"
+    },
+    {
+      "code": 6059,
+      "name": "unsupportedTraderPdaIndex",
+      "msg": "Phoenix trader PDA index is not the supported user index"
+    },
+    {
+      "code": 6060,
+      "name": "zeroEntryMarkPrice",
+      "msg": "Recorded entry mark price must be non-zero when opening a position"
+    },
+    {
+      "code": 6061,
+      "name": "zeroMarginPosted",
+      "msg": "Recorded margin must be non-zero when opening a position"
+    },
+    {
+      "code": 6062,
+      "name": "stalePerpExecution",
+      "msg": "Phoenix execution timestamp is too old to settle"
+    },
+    {
+      "code": 6063,
+      "name": "stalePerpAttestation",
+      "msg": "Phoenix event timestamp is too old to attest"
+    },
+    {
+      "code": 6064,
+      "name": "timestampInFuture",
+      "msg": "Timestamp is further in the future than clock skew allows"
+    },
+    {
+      "code": 6065,
+      "name": "mismatchedBasket",
+      "msg": "Referenced basket does not match the basket this record belongs to"
+    },
+    {
+      "code": 6066,
+      "name": "marketIdTooLong",
+      "msg": "Market identifier exceeds the maximum supported length"
     }
   ],
   "types": [
@@ -2479,6 +3173,72 @@ export type PolybasketsEscrow = {
           {
             "name": "updatedAt",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "attestPerpEventArgs",
+      "docs": [
+        "An autonomous Phoenix action. Callable unprompted, with no matching trade."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "eventHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "basketId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "eventKind",
+            "type": {
+              "defined": {
+                "name": "perpEventKind"
+              }
+            }
+          },
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "detailHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "observedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "attestationNonce",
+            "type": "u64"
           }
         ]
       }
@@ -2887,6 +3647,158 @@ export type PolybasketsEscrow = {
           {
             "name": "protocolFee",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "completePhoenixTradeArgs",
+      "docs": [
+        "An already-executed, vault-delta-verified Phoenix trade.",
+        "",
+        "Every figure was computed off chain and read back from real post-execution",
+        "Phoenix state. This program validates and records; it computes no NAV, no fees",
+        "and no PnL."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "executionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "requestHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "idempotencyKey",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "settlementNonce",
+            "type": "u64"
+          },
+          {
+            "name": "basketId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "expectedCompositionVersion",
+            "docs": [
+              "Bound the same way `complete_deposit` binds: the basket's live",
+              "`composition_version`. The hash is checked as well, because unlike a",
+              "deposit this instruction writes into `items`."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "expectedCompositionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "marketId",
+            "docs": [
+              "Phoenix market symbol, read live from exchange metadata by the backend."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": {
+                "name": "perpTradeSide"
+              }
+            }
+          },
+          {
+            "name": "direction",
+            "type": {
+              "defined": {
+                "name": "perpDirection"
+              }
+            }
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "leverageBps",
+            "type": "u16"
+          },
+          {
+            "name": "executionWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "requestedCollateralUnits",
+            "type": "u64"
+          },
+          {
+            "name": "actualMarginPostedUnits",
+            "docs": [
+              "Collateral actually resident in the isolated subaccount after execution."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entryMarkPrice",
+            "docs": [
+              "Entry price of the resulting position. Zero means \"no position left to",
+              "price\" and is accepted only on a close."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fillStatus",
+            "type": {
+              "defined": {
+                "name": "perpFillStatus"
+              }
+            }
+          },
+          {
+            "name": "executedAt",
+            "type": "i64"
+          },
+          {
+            "name": "executedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "transactionSignature",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
           }
         ]
       }
@@ -3612,6 +4524,42 @@ export type PolybasketsEscrow = {
       }
     },
     {
+      "name": "onboardTraderAccountArgs",
+      "docs": [
+        "One-time Phoenix onboarding record for an execution wallet."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "executionWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "phoenixTraderPda",
+            "type": "pubkey"
+          },
+          {
+            "name": "phoenixPdaIndex",
+            "type": "u8"
+          },
+          {
+            "name": "onboardedAt",
+            "type": "i64"
+          },
+          {
+            "name": "onboardingSignature",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "pauseUpdated",
       "type": {
         "kind": "struct",
@@ -3619,6 +4567,517 @@ export type PolybasketsEscrow = {
           {
             "name": "paused",
             "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpDirection",
+      "docs": [
+        "Direction of a perpetual position.",
+        "",
+        "A dedicated enum rather than a bool or a signed size: a bool has no natural",
+        "reading (\"true\" is not obviously long), and a signed magnitude conflates",
+        "direction with size, so a zero-size position would have no direction at all."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "long"
+          },
+          {
+            "name": "short"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEligibilityList",
+      "docs": [
+        "Short-lived Composer-published perpetual market list, the perp counterpart to",
+        "`EligibilityList`. Seeded at `b\"perp_eligibility\"` so it cannot collide with",
+        "the prediction-market list at `b\"eligibility\"`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "composer",
+            "type": "pubkey"
+          },
+          {
+            "name": "publishedAt",
+            "type": "i64"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "perpEligibleMarket"
+                }
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEligibilityListPublished",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "perpEligibilityList",
+            "type": "pubkey"
+          },
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "marketCount",
+            "type": "u16"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEligibleMarket",
+      "docs": [
+        "One Phoenix perpetual market the Composer has admitted.",
+        "",
+        "Deliberately not `EligibleMarket`: that type's `outcome` and `ctf_token_id`",
+        "are Polymarket/CTF fields with no meaning for a perpetual, and spot has its own",
+        "`TokenAllowlist`. Weights are absent for the same reason as `EligibleMarket` —",
+        "creators choose them after eligibility is signed."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "marketId",
+            "docs": [
+              "Phoenix market symbol, e.g. \"SOL\". Read live from Phoenix exchange metadata."
+            ],
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEventAttestation",
+      "docs": [
+        "Record of an autonomous Phoenix action against a basket position.",
+        "Seeds: `[b\"perp_event\", event_hash]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "eventHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "eventKind",
+            "type": {
+              "defined": {
+                "name": "perpEventKind"
+              }
+            }
+          },
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "detailHash",
+            "docs": [
+              "Hash of the full Phoenix event payload, which is too large and too",
+              "venue-specific to store on chain."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "observedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "recordedAt",
+            "type": "i64"
+          },
+          {
+            "name": "recordedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "attestationNonce",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEventAttested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestation",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "eventHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpEventKind",
+      "docs": [
+        "The kind of unprompted action Phoenix took on a position.",
+        "",
+        "Phoenix's own wire names are `adl` and `risk_engine_cancel_order`."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "adl"
+          },
+          {
+            "name": "autonomousCancel"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpFillStatus",
+      "docs": [
+        "Outcome of a Phoenix execution, derived from post-execution position state.",
+        "",
+        "There is deliberately no `Rejected` variant. A rejected order posted no margin",
+        "and opened no position, so there is nothing to settle: the backend surfaces it",
+        "as a failure and never reaches `complete_phoenix_trade`. Accepting `Rejected`",
+        "here would create a receipt asserting a trade happened when it did not."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "filled"
+          },
+          {
+            "name": "partiallyFilled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpSettlementReceipt",
+      "docs": [
+        "Immutable record of one already-executed Phoenix trade.",
+        "Seeds: `[b\"perp_receipt\", execution_hash]`.",
+        "",
+        "Named and seeded apart from `SettlementReceipt`, which records accounting",
+        "settlements at `[b\"receipt\", execution_batch_hash]` and has an unrelated shape."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "executionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "requestHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "idempotencyKey",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "executionWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": {
+                "name": "perpTradeSide"
+              }
+            }
+          },
+          {
+            "name": "direction",
+            "type": {
+              "defined": {
+                "name": "perpDirection"
+              }
+            }
+          },
+          {
+            "name": "fillStatus",
+            "type": {
+              "defined": {
+                "name": "perpFillStatus"
+              }
+            }
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "leverageBps",
+            "type": "u16"
+          },
+          {
+            "name": "requestedCollateralUnits",
+            "type": "u64"
+          },
+          {
+            "name": "actualMarginPostedUnits",
+            "docs": [
+              "Read from post-execution Phoenix state, never from a quote."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entryMarkPrice",
+            "docs": [
+              "Read from post-execution Phoenix state, never from a quote."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "settlementNonce",
+            "type": "u64"
+          },
+          {
+            "name": "executedAt",
+            "type": "i64"
+          },
+          {
+            "name": "executedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "recordedAt",
+            "type": "i64"
+          },
+          {
+            "name": "recordedSlot",
+            "type": "u64"
+          },
+          {
+            "name": "transactionSignature",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "perpTradeSide",
+      "docs": [
+        "Whether a recorded Phoenix trade opened or closed a position."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "open"
+          },
+          {
+            "name": "close"
+          }
+        ]
+      }
+    },
+    {
+      "name": "phoenixTradeSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "receipt",
+            "type": "pubkey"
+          },
+          {
+            "name": "basket",
+            "type": "pubkey"
+          },
+          {
+            "name": "executionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "marketId",
+            "type": "string"
+          },
+          {
+            "name": "phoenixSubaccount",
+            "type": "u8"
+          },
+          {
+            "name": "actualMarginPostedUnits",
+            "docs": [
+              "Read from post-execution Phoenix state, never from a quote."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entryMarkPrice",
+            "type": "u64"
+          },
+          {
+            "name": "settlementNonce",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "phoenixTraderOnboarded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "registry",
+            "type": "pubkey"
+          },
+          {
+            "name": "executionWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "phoenixTraderPda",
+            "type": "pubkey"
+          },
+          {
+            "name": "onboardedAt",
+            "type": "i64"
           }
         ]
       }
@@ -3682,7 +5141,11 @@ export type PolybasketsEscrow = {
     {
       "name": "positionKind",
       "docs": [
-        "Tagged representation of a supported basket position."
+        "Tagged representation of a supported basket position.",
+        "",
+        "Adding `Perp` does not change `PositionKind::INIT_SPACE`: the variant is 20",
+        "bytes against `PredictionMarket`'s 33, so the maximum is unchanged and no",
+        "existing `Basket` or `CompositionDraft` needs a realloc."
       ],
       "type": {
         "kind": "enum",
@@ -3711,6 +5174,40 @@ export type PolybasketsEscrow = {
               {
                 "name": "tokenMint",
                 "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "perp",
+            "fields": [
+              {
+                "name": "direction",
+                "type": {
+                  "defined": {
+                    "name": "perpDirection"
+                  }
+                }
+              },
+              {
+                "name": "leverageBps",
+                "type": "u16"
+              },
+              {
+                "name": "entryMarkPrice",
+                "type": "u64"
+              },
+              {
+                "name": "marginPosted",
+                "type": "u64"
+              },
+              {
+                "name": "phoenixSubaccount",
+                "docs": [
+                  "Phoenix isolated subaccount index. Always greater than zero;",
+                  "subaccount 0 is Phoenix's cross-margin account and is never used to",
+                  "hold a position."
+                ],
+                "type": "u8"
               }
             ]
           }
@@ -3939,6 +5436,41 @@ export type PolybasketsEscrow = {
               "vec": {
                 "defined": {
                   "name": "eligibleMarket"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "publishPerpEligibilityListArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "markets",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "perpEligibleMarket"
                 }
               }
             }
@@ -4340,6 +5872,47 @@ export type PolybasketsEscrow = {
           },
           {
             "name": "other"
+          }
+        ]
+      }
+    },
+    {
+      "name": "traderAccountRegistry",
+      "docs": [
+        "Proof that an execution wallet was onboarded to Phoenix exactly once.",
+        "Seeds: `[b\"perp_trader\", execution_wallet]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "executionWallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "phoenixTraderPda",
+            "type": "pubkey"
+          },
+          {
+            "name": "phoenixPdaIndex",
+            "type": "u8"
+          },
+          {
+            "name": "onboardedAt",
+            "type": "i64"
+          },
+          {
+            "name": "onboardingSignature",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

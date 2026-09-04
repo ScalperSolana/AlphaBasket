@@ -26,6 +26,19 @@ export const WITHDRAWAL_INTENT_DOMAIN = Buffer.from(
 );
 
 export const MAX_BASKET_ITEMS = 16;
+/**
+ * Phoenix perpetuals. Mirrors `constants.rs`.
+ *
+ * Perpetuals get their own allowlist rather than reusing `EligibleMarket`, whose
+ * `outcome` and `ctfTokenId` are Polymarket/CTF fields with no meaning here.
+ */
+export const MAX_PERP_ELIGIBLE_MARKETS = 16;
+export const MIN_PERP_LEVERAGE_BPS = 10_000;
+export const MAX_PERP_LEVERAGE_BPS = 50_000;
+/** Phoenix's cross-margin subaccount. Never used to hold a position. */
+export const PHOENIX_CROSS_SUBACCOUNT_INDEX = 0;
+/** The only Phoenix trader PDA index activated for user portfolios. */
+export const PHOENIX_USER_PDA_INDEX = 0;
 export const MAX_ELIGIBLE_MARKETS = 16;
 export const MAX_MARKET_ID_BYTES = 64;
 export const MAX_SINGLE_SOURCE_WEIGHT_BPS = 3_000;

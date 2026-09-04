@@ -172,3 +172,43 @@ pub struct FinalSettlementRecorded {
     pub final_nav_value: u64,
     pub final_share_snapshot: u64,
 }
+
+#[event]
+pub struct PerpEligibilityListPublished {
+    pub perp_eligibility_list: Pubkey,
+    pub list_hash: [u8; 32],
+    pub nonce: u64,
+    pub market_count: u16,
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct PhoenixTraderOnboarded {
+    pub registry: Pubkey,
+    pub execution_wallet: Pubkey,
+    pub phoenix_trader_pda: Pubkey,
+    pub onboarded_at: i64,
+}
+
+#[event]
+pub struct PhoenixTradeSettled {
+    pub receipt: Pubkey,
+    pub basket: Pubkey,
+    pub execution_hash: [u8; 32],
+    pub market_id: String,
+    pub phoenix_subaccount: u8,
+    /// Read from post-execution Phoenix state, never from a quote.
+    pub actual_margin_posted_units: u64,
+    pub entry_mark_price: u64,
+    pub settlement_nonce: u64,
+}
+
+#[event]
+pub struct PerpEventAttested {
+    pub attestation: Pubkey,
+    pub basket: Pubkey,
+    pub event_hash: [u8; 32],
+    pub market_id: String,
+    pub phoenix_subaccount: u8,
+    pub observed_at: i64,
+}

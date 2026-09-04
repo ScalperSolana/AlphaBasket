@@ -3,20 +3,22 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     MAX_ALLOWLISTED_TOKENS, MAX_BPS, MAX_ELIGIBILITY_VALIDITY_SECS, MAX_ELIGIBLE_MARKETS,
-    MAX_MARKET_ID_LEN, MAX_PRICE_ATTESTATION_VALIDITY_SECS, PRICE_ATTESTATION_DOMAIN,
+    MAX_MARKET_ID_LEN, MAX_PERP_ELIGIBLE_MARKETS, MAX_PRICE_ATTESTATION_VALIDITY_SECS,
+    PRICE_ATTESTATION_DOMAIN,
 };
 use crate::errors::EscrowError;
 use crate::events::{
-    CompositionDraftPublished, EligibilityListPublished, PriceAttestationSubmitted,
-    TokenAllowlistUpdated,
+    CompositionDraftPublished, EligibilityListPublished, PerpEligibilityListPublished,
+    PriceAttestationSubmitted, TokenAllowlistUpdated,
 };
 use crate::instructions::create_basket::{
     canonical_composition_bytes, validate_basket_items, verify_composer_signature,
 };
 use crate::state::{
-    AllowedToken, CompositionDraft, Config, EligibilityList, EligibleMarket, PriceAttestation,
-    PublishCompositionDraftArgs, PublishEligibilityListArgs, RegisterTokenArgs, SpotPriceSource,
-    SubmitPriceAttestationArgs, TokenAllowlist, TokenAssetClass, TradingAvailability,
+    AllowedToken, CompositionDraft, Config, EligibilityList, EligibleMarket, PerpEligibilityList,
+    PerpEligibleMarket, PriceAttestation, PublishCompositionDraftArgs, PublishEligibilityListArgs,
+    PublishPerpEligibilityListArgs, RegisterTokenArgs, SpotPriceSource, SubmitPriceAttestationArgs,
+    TokenAllowlist, TokenAssetClass, TradingAvailability,
 };
 
 #[derive(Accounts)]
@@ -40,6 +42,32 @@ pub struct PublishEligibilityList<'info> {
         space = 8 + EligibilityList::INIT_SPACE,
     )]
     pub eligibility_list: Account<'info, EligibilityList>,
+    #[account(mut)]
+    pub composer_signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(args: PublishPerpEligibilityListArgs)]
+pub struct PublishPerpEligibilityList<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = composer_signer,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = composer_signer,
+        seeds = [
+            b"perp_eligibility",
+            args.list_hash.as_ref(),
+            args.nonce.to_le_bytes().as_ref(),
+        ],
+        bump,
+        space = 8 + PerpEligibilityList::INIT_SPACE,
+    )]
+    pub perp_eligibility_list: Account<'info, PerpEligibilityList>,
     #[account(mut)]
     pub composer_signer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -178,6 +206,91 @@ pub fn publish_eligibility_list_handler(
     Ok(())
 }
 
+/// Publishes the Composer-screened Phoenix perpetual market list.
+///
+/// Mirrors `publish_eligibility_list_handler`, including the same validity bound
+/// and the same hash-over-canonical-bytes check, so neither list can be published
+/// with contents that disagree with the hash the Composer signed.
+pub fn publish_perp_eligibility_list_handler(
+    ctx: Context<PublishPerpEligibilityList>,
+    args: PublishPerpEligibilityListArgs,
+) -> Result<()> {
+    require!(!ctx.accounts.config.paused, EscrowError::Paused);
+    require!(
+        args.list_hash != [0u8; 32] && args.nonce > 0,
+        EscrowError::InvalidPerpEligibilityList
+    );
+    validate_perp_eligible_markets(&args.markets)?;
+    let now = Clock::get()?.unix_timestamp;
+    require!(
+        args.expires_at > now
+            && args.expires_at
+                <= now
+                    .checked_add(MAX_ELIGIBILITY_VALIDITY_SECS)
+                    .ok_or(EscrowError::MathOverflow)?,
+        EscrowError::InvalidPerpEligibilityList
+    );
+    let canonical = canonical_perp_eligibility_bytes(&args.markets)?;
+    require!(
+        Sha256::digest(&canonical).as_slice() == args.list_hash,
+        EscrowError::InvalidPerpEligibilityList
+    );
+
+    let list = &mut ctx.accounts.perp_eligibility_list;
+    list.list_hash = args.list_hash;
+    list.nonce = args.nonce;
+    list.composer = ctx.accounts.composer_signer.key();
+    list.published_at = now;
+    list.expires_at = args.expires_at;
+    list.markets = args.markets;
+    list.bump = ctx.bumps.perp_eligibility_list;
+
+    emit!(PerpEligibilityListPublished {
+        perp_eligibility_list: list.key(),
+        list_hash: list.list_hash,
+        nonce: list.nonce,
+        market_count: u16::try_from(list.markets.len())
+            .map_err(|_| EscrowError::InvalidPerpEligibilityList)?,
+        expires_at: list.expires_at,
+    });
+    Ok(())
+}
+
+pub(crate) fn validate_perp_eligible_markets(markets: &[PerpEligibleMarket]) -> Result<()> {
+    require!(
+        !markets.is_empty() && markets.len() <= MAX_PERP_ELIGIBLE_MARKETS,
+        EscrowError::InvalidPerpEligibilityList
+    );
+    for (index, market) in markets.iter().enumerate() {
+        require!(
+            !market.market_id.is_empty() && market.market_id.len() <= MAX_MARKET_ID_LEN,
+            EscrowError::InvalidPerpEligibilityList
+        );
+        for other in markets.iter().skip(index + 1) {
+            require!(
+                market.market_id != other.market_id,
+                EscrowError::InvalidPerpEligibilityList
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_perp_eligibility_bytes(markets: &[PerpEligibleMarket]) -> Result<Vec<u8>> {
+    let market_count =
+        u16::try_from(markets.len()).map_err(|_| EscrowError::InvalidPerpEligibilityList)?;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&market_count.to_le_bytes());
+    for market in markets {
+        let market_id = market.market_id.as_bytes();
+        let market_len =
+            u16::try_from(market_id.len()).map_err(|_| EscrowError::InvalidPerpEligibilityList)?;
+        bytes.extend_from_slice(&market_len.to_le_bytes());
+        bytes.extend_from_slice(market_id);
+    }
+    Ok(bytes)
+}
+
 pub fn publish_composition_draft_handler(
     ctx: Context<PublishCompositionDraft>,
     args: PublishCompositionDraftArgs,
@@ -202,6 +315,12 @@ pub fn publish_composition_draft_handler(
         &args.items,
         &ctx.accounts.eligibility_list,
         ctx.remaining_accounts,
+        // A draft is staging and is published before the basket it will be used
+        // for is known, so the perpetual flag is not available here. The real
+        // check happens where the flag exists: `create_basket` reads it from its
+        // own args, and `complete_reconstitution` from the basket. Passing
+        // `true` waives only that one rule; every other check still applies.
+        true,
     )?;
     let canonical = canonical_composition_bytes(&args.items)?;
     require!(
