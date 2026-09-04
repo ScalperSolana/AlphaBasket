@@ -13,6 +13,11 @@ import {
   RECONCILIATION_DASHBOARD_JS,
 } from "../reconciliation/index.js";
 import { ApiRequestError, type FinancialApiPort } from "./api-types.js";
+import type {
+  IndexDetailView,
+  IndexSummaryView,
+  PortfolioHoldingView,
+} from "./read-store.js";
 
 export interface ReadinessProbe {
   check(): Promise<void>;
@@ -32,7 +37,19 @@ export interface BackendHttpServerOptions {
     composerBearerToken: string;
     allowedOrigins: ReadonlySet<string>;
     maximumBodyBytes?: number;
+    /**
+     * Read plane for the product surface. Optional so a deployment that only
+     * serves the write API, or one running without the indexer, still starts.
+     */
+    reads?: IndexReadPort;
   }>;
+}
+
+/** The read queries the browser needs. Implemented by `PostgresIndexReadStore`. */
+export interface IndexReadPort {
+  listIndexes(limit?: number): Promise<readonly IndexSummaryView[]>;
+  getIndex(address: string): Promise<IndexDetailView | null>;
+  getPortfolio(owner: string): Promise<readonly PortfolioHoldingView[]>;
 }
 
 export interface BackendHttpResponse {
@@ -242,6 +259,44 @@ async function resolveFinancialApiResponse(
         headers,
       };
     }
+    // --- read plane -------------------------------------------------------
+    //
+    // Public and unauthenticated. Everything served here is already public on
+    // chain; requiring a token would only stop a browser from rendering it.
+    if (method === "GET" && url.pathname === "/v1/indexes" && api.reads !== undefined) {
+      const limit = Number(url.searchParams.get("limit") ?? "100");
+      return {
+        statusCode: 200,
+        body: {
+          indexes: await api.reads.listIndexes(
+            Number.isFinite(limit) ? limit : 100,
+          ),
+        },
+        headers,
+      };
+    }
+
+    const indexDetail = /^\/v1\/indexes\/([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(
+      url.pathname,
+    );
+    if (method === "GET" && indexDetail !== null && api.reads !== undefined) {
+      const found = await api.reads.getIndex(indexDetail[1]!);
+      return found === null
+        ? { statusCode: 404, body: { error: "not_found" }, headers }
+        : { statusCode: 200, body: { index: found }, headers };
+    }
+
+    const portfolio = /^\/v1\/portfolio\/([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(
+      url.pathname,
+    );
+    if (method === "GET" && portfolio !== null && api.reads !== undefined) {
+      return {
+        statusCode: 200,
+        body: { holdings: await api.reads.getPortfolio(portfolio[1]!) },
+        headers,
+      };
+    }
+
     if (url.pathname === "/v1/baskets") {
       if (method !== "POST") {
         return { statusCode: 405, body: { error: "method_not_allowed" }, headers: { ...headers, allow: "POST" } };
