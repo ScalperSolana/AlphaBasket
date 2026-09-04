@@ -7,14 +7,17 @@ import { NetworkProvider } from "@/contexts/NetworkContext";
 import { WalletProvider } from "@/contexts/WalletContext";
 import { BasketProvider } from "@/contexts/BasketContext";
 import { Header } from "@/components/layout/Header";
-import Index from "./pages/Index";
-import ExplorePage from "./pages/ExplorePage";
-import ExplorerHoldPage from "./pages/ExplorerHoldPage";
-import BuilderPage from "./pages/BuilderPage";
-import BasketPage from "./pages/BasketPage";
-import MyBasketsPage from "./pages/MyBasketsPage";
-// import DocsPage from "./pages/DocsPage"; // Hidden for now
+import DiscoverPage from "./pages/index-product/DiscoverPage";
+import CreateIndexPage from "./pages/index-product/CreateIndexPage";
+import IndexPage from "./pages/index-product/IndexPage";
+import PortfolioPage from "./pages/index-product/PortfolioPage";
 import NotFound from "./pages/NotFound";
+
+// The prediction-market contest surface. Left on disk and off the router while
+// the index product is the live experience: the pages still build, and nothing
+// has been thrown away, but none of it is reachable.
+//   pages/Index, ExplorePage, ExplorerHoldPage, BuilderPage, BasketPage,
+//   MyBasketsPage, LandingPage, DocsPage
 import { ConnectionProvider, WalletProvider as SolanaWalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { ENV } from "./env";
@@ -24,25 +27,18 @@ import { Send } from "lucide-react";
 const queryClient = new QueryClient();
 
 function AppRoutes() {
-  const hostname = window.location.hostname;
-  const isAppHost = hostname === "app.polybaskets.xyz";
-  const isExplorerHoldEnabled = ENV.EXPLORER_HOLD_ENABLED;
-  const holdPage = <ExplorerHoldPage />;
-  const explorerEntryPage = isExplorerHoldEnabled ? holdPage : <ExplorePage />;
-  const builderEntryPage = isExplorerHoldEnabled ? holdPage : <BuilderPage />;
-  const basketsEntryPage = isExplorerHoldEnabled ? holdPage : <MyBasketsPage />;
-
   return (
     <Routes>
-      <Route
-        path="/"
-        element={isAppHost ? <Navigate to="/explorer" replace /> : <Index />}
-      />
-      <Route path="/explorer" element={explorerEntryPage} />
-      <Route path="/builder" element={builderEntryPage} />
-      <Route path="/claim" element={<Navigate to="/explorer" replace />} />
-      <Route path="/basket/:id" element={<BasketPage />} />
-      <Route path="/me" element={basketsEntryPage} />
+      <Route path="/" element={<DiscoverPage />} />
+      <Route path="/create" element={<CreateIndexPage />} />
+      <Route path="/index/:address" element={<IndexPage />} />
+      <Route path="/portfolio" element={<PortfolioPage />} />
+
+      {/* Old contest paths, so a stale link lands somewhere sensible. */}
+      <Route path="/explorer" element={<Navigate to="/" replace />} />
+      <Route path="/builder" element={<Navigate to="/create" replace />} />
+      <Route path="/me" element={<Navigate to="/portfolio" replace />} />
+
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
