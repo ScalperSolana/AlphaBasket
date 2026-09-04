@@ -24,6 +24,17 @@ const environmentSchema = z.object({
   ACCOUNTING_SOLANA_CLUSTER: z.enum(["localnet", "devnet", "mainnet-beta"]).default("localnet"),
   CAPITAL_SOLANA_CLUSTER: z.enum(["localnet", "devnet", "mainnet-beta"]).default("localnet"),
   CAPITAL_MODE: z.enum(["mock", "prefunded_staging", "live_bridge"]).default("mock"),
+  /**
+   * Prediction-market execution through Polymarket.
+   *
+   * Off by default while the MVP runs Solana-only. Everything it needs still
+   * exists: the Polygon signer, the bridge, CTF redemption and the relayer. This
+   * is a switch rather than a deletion because re-adding roughly 1,400 lines and
+   * the 51 files that reference them costs far more than leaving them dark, and
+   * the on-chain `PositionKind::PredictionMarket` variant stays regardless,
+   * since removing a variant from a deployed program is a migration.
+   */
+  POLYMARKET_ENABLED: z.enum(["true", "false"]).default("false"),
   MANAGEMENT_FEE_KEEPER_INTERVAL_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),
   RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(10_000).max(86_400_000).default(60_000),
   OUTBOX_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
