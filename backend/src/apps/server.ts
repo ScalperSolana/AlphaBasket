@@ -55,6 +55,7 @@ import {
   PrefundedStagingDepositFundingRoute,
   StickyExecutionWalletRoute,
   createBackendHttpServer,
+  PostgresIndexReadStore,
 } from "../server/index.js";
 import {
   PostgresExecutionWalletRegistry,
@@ -250,6 +251,7 @@ const server = createBackendHttpServer({
     composerBearerToken: required(config.api.composerApiToken, "COMPOSER_API_TOKEN"),
     allowedOrigins: new Set(config.api.allowedOrigins),
     maximumBodyBytes: config.api.maximumBodyBytes,
+    reads: new PostgresIndexReadStore(sql),
   },
   ...(config.operations.apiToken === undefined ? {} : {
     operations: {
