@@ -70,76 +70,9 @@ Our goal is to become the infrastructure layer for thesis driven investing on So
 
 Built with ❤️ on Solana
 
+
 Configured devnet program ID:
 `5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm`.
-
-## Current architecture
-
-```mermaid
-flowchart LR
-    User["User wallet"]
-    API["AlphaBasket API"]
-    Bridge["Polymarket Bridge API"]
-    CLOB["Polymarket CLOB"]
-    Jupiter["Jupiter Swap / Price APIs"]
-    Polygon["Shared Polygon execution wallet"]
-    Settlement["Solana mainnet settlement wallet"]
-    Program["AlphaBasket program on devnet"]
-    Indexer["Indexer and NAV services"]
-    Gateway["Key-holding execution gateway"]
-    Signer["KMS / HSM signer"]
-
-    User -->|"signed intent"| API
-    User -->|"mainnet USDC deposit"| Bridge
-    Bridge -->|"pUSD credit"| Polygon
-    API --> Gateway
-    Gateway --> Signer
-    Gateway -->|"EIP-712 + HMAC FAK orders"| CLOB
-    Gateway -->|"signed Swap V2 transaction"| Jupiter
-    CLOB --> Polygon
-    Jupiter --> Settlement
-    Polygon -->|"pUSD withdrawal"| Bridge
-    Bridge -->|"mainnet USDC"| Settlement
-    Gateway -->|"user / creator / protocol split"| User
-    API -->|"complete_* accounting"| Program
-    Program --> Indexer
-    Indexer -->|"NAV and share state"| API
-```
-
-### Deposit flow
-
-1. The API creates a short-lived deposit quote and the user signs the exact
-   intent.
-2. The user submits one Solana-mainnet transaction containing:
-   - prediction allocation to the Polymarket bridge address;
-   - spot allocation to the mainnet settlement wallet; and
-   - the 0.5% deposit fee to the protocol destination.
-3. The backend verifies both finalized mainnet token-account deltas.
-4. The Bridge API converts prediction allocation to pUSD in the assigned
-   Polygon execution wallet.
-5. The worker submits prediction FAK buys and Jupiter spot swaps. Partial fills
-   are accepted; unspent pUSD and USDC remain attributed to the basket.
-6. The backend reloads a fresh off-chain NAV and submits `complete_deposit` to
-   the Solana-devnet program.
-7. The program verifies the user intent, backend authority, execution
-   attestation, limits and accounting math before minting internal shares.
-
-### Withdrawal flow
-
-1. The user signs a withdrawal intent for a specific share amount and minimum
-   output.
-2. The backend liquidates the basket pro rata using prediction FAK sells and
-   Jupiter spot-to-USDC swaps, including redeemed idle pUSD and USDC.
-3. Only realized pUSD is transferred through the Bridge API to the configured
-   Solana-mainnet settlement wallet.
-4. The backend verifies the finalized mainnet USDC receipt.
-5. The execution gateway atomically distributes mainnet USDC to the user,
-   creator and protocol.
-6. Only after those effects are verified does the backend submit
-   `complete_withdrawal` to the Solana-devnet program.
-
-The same split applies to protocol management-share redemption: capital moves
-on mainnet/Polygon while the accounting completion runs on devnet.
 
 ## Share accounting and fees
 
@@ -162,7 +95,7 @@ Current fee model:
 | Mature withdrawal | Protocol | 1% at or after 60 days |
 | Performance | Creator | 0–20%, default 10%, charged only on redeemed-share profit |
 
-Management fees do not sell Polymarket positions. The program mints protocol
+Management fees do not sell Basket positions. The program mints protocol
 shares, diluting the existing supply. A scheduled keeper accrues active baskets,
 and every financial/lifecycle instruction provides a lazy-accrual fallback.
 
@@ -280,131 +213,6 @@ reconciled against both.
 Financial mutations require idempotency keys. Composer and operations routes use
 separate bearer authentication.
 
-## Hybrid environment
-
-Copy `backend/.env.example` to `backend/.env` and configure at least:
-
-```text
-DEPLOYMENT_MODE=hybrid_devnet
-
-ACCOUNTING_SOLANA_CLUSTER=devnet
-ACCOUNTING_SOLANA_RPC_URL=<Solana devnet RPC>
-
-CAPITAL_SOLANA_CLUSTER=mainnet-beta
-CAPITAL_SOLANA_RPC_URL=<Solana mainnet RPC>
-CAPITAL_SOLANA_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-
-CAPITAL_MODE=live_bridge
-POLYGON_CHAIN_ID=137
-POLYGON_RPC_URL=<Polygon mainnet RPC>
-
-POLYMARKET_CLOB_API_KEY=<CLOB API key>
-POLYMARKET_CLOB_API_SECRET=<CLOB API secret>
-POLYMARKET_CLOB_API_PASSPHRASE=<CLOB passphrase>
-POLYMARKET_EXECUTION_WALLET=<Polygon execution wallet>
-POLYMARKET_PUSD_TOKEN_ADDRESS=<Polygon pUSD token>
-SOLANA_SETTLEMENT_RECEIVER=<Solana mainnet settlement owner>
-
-JUPITER_SPOT_ENABLED=true
-JUPITER_API_KEY=<Jupiter API key>
-JUPITER_TOKENS_URL=https://api.jup.ag/tokens/v2
-JUPITER_SWAP_URL=https://api.jup.ag/swap/v2
-JUPITER_PRICE_URL=https://api.jup.ag/price/v3
-
-EXECUTION_GATEWAY_URL=<internal gateway URL>
-EXECUTION_GATEWAY_TOKEN=<random 32+ character secret>
-REMOTE_SIGNER_URL=<remote signing service>
-REMOTE_SIGNER_TOKEN=<random 32+ character secret>
-```
-
-The backend rejects hybrid startup unless:
-
-- accounting is labelled devnet;
-- capital is labelled mainnet-beta;
-- capital mode is `live_bridge`;
-- Polymarket uses Polygon chain ID 137; and
-- accounting and capital use different RPC URLs.
-
-Public-network workers also verify each RPC's genesis hash, preventing an
-endpoint labelled as devnet from silently pointing to mainnet or vice versa.
-
-## Running the backend
-
-Requirements:
-
-- Node.js 22 or newer.
-- PostgreSQL 16 or compatible.
-- Temporal.
-- Solana CLI and Anchor 0.32.1 for program development.
-- The included loopback development signer for internal testing, or an external
-  KMS/HSM signer endpoint for production.
-
-Install and migrate:
-
-```bash
-npm install
-npm --prefix backend install
-npm run migrate:backend
-```
-
-Start production-style processes in this order:
-
-```bash
-npm run start:indexer:backend
-npm run start:nav:backend
-npm run start:remote-signer:backend
-npm run start:execution-gateway:backend
-npm run start:execution-dispatcher:backend
-npm run start:execution:backend
-npm run start:lifecycle:backend
-npm run start:backend
-```
-
-Development equivalents use the `dev:*:backend` scripts in the root
-`package.json`.
-
-The API listens on `127.0.0.1:3001`, the execution gateway on
-`127.0.0.1:3002`, and the internal-testing remote signer on
-`127.0.0.1:3003` by default. Generate its ignored mode-`0600` keyring first:
-
-```bash
-mkdir -p backend/.remote-signer
-npm run signer:keyring:generate:backend -- \
-  --output /absolute/path/to/AlphaBasket/backend/.remote-signer/keyring.json
-```
-
-The command prints only public identities to place in
-`POLYMARKET_EXECUTION_WALLET`, `SOLANA_SETTLEMENT_RECEIVER`,
-`COMPOSER_SIGNER_PUBLIC_KEY`, and `BACKEND_SIGNER_PUBLIC_KEY`. Full setup and
-the program-key mapping are documented in
-[`backend/README.md`](backend/README.md#remote-signer-for-internal-testing).
-
-## Verification
-
-Backend:
-
-```bash
-npm --prefix backend run typecheck
-npm --prefix backend test
-npm --prefix backend run idl:check
-npm --prefix backend audit --omit=dev
-```
-
-Contract:
-
-```bash
-cd solana-escrow
-anchor build
-anchor test
-```
-
-Check the configured devnet deployment:
-
-```bash
-solana program show \
-  5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm \
-  --url devnet
-```
 
 ## Security model
 
@@ -427,43 +235,3 @@ solana program show \
 - Hybrid mode moves real mainnet capital and therefore uses the same allowlists,
   caps and reconciliation controls as a production canary.
 
-## Current integration status
-
-The contract, backend domain logic, API routes, workers, execution gateway,
-management-fee automation, reconciliation and security tests are implemented.
-
-Before a live hybrid test, operators must still:
-
-1. connect real devnet/mainnet/Polygon RPCs;
-2. generate the loopback development keyring for internal testing, or provision
-   the production KMS/HSM signer roles;
-3. configure CLOB credentials and required Polymarket token approvals;
-4. configure a Jupiter API key, official mainnet USDC mint and vetted spot
-   mints;
-5. register/fund the execution and settlement wallets;
-6. apply migrations and start PostgreSQL/Temporal/workers;
-7. verify that the latest local contract build matches the devnet deployment;
-8. execute low-value prediction-only, spot-only and mixed deposit/withdrawal
-   canaries.
-
-The React frontend still needs to be wired to the current quote/intent/operation APIs
-and use a separate Solana-mainnet capital connection for deposit transactions.
-
-Production Composer TODO:
-
-1. Wire authoritative Gamma market sourcing into the backend.
-2. Connect a trusted classifier for thematic relevance and outcome clarity.
-3. Fetch and verify current price, spread, depth and volume directly from the
-   CLOB before composing a basket.
-4. Restrict caller-prepared candidate data to internal-testing environments;
-   production must not sign caller-supplied liquidity or classification claims.
-5. Add a full Gamma → classifier → CLOB → filtering/weighting → signed
-   composition → devnet/mainnet `create_basket` integration test.
-
-Detailed backend operations are documented in
-[`backend/README.md`](backend/README.md) and
-[`backend/docs/phase-5-6-runbook.md`](backend/docs/phase-5-6-runbook.md).
-
-Legacy quote-signer, settler and escrow-oriented directories may remain in the
-repository for reference, but they are not the active AlphaBasket execution
-path described above.
