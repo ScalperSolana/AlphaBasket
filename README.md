@@ -1,17 +1,74 @@
 # AlphaBasket
 
-AlphaBasket is a real-position Polymarket basket protocol with share accounting
-on Solana.
+AlphaBasket is a Solana native protocol for thesis driven investing.
 
-The current architecture deliberately separates accounting from capital:
+Instead of investing in individual assets, users invest in ideas.
 
-- The AlphaBasket program runs on **Solana devnet** during internal testing.
-- User USDC deposits and withdrawal payouts use **Solana mainnet-beta**.
-- Prediction trading and custody use **Polymarket on Polygon mainnet**.
-- Spot trading and custody use **Jupiter and a backend-controlled Solana
-  mainnet settlement wallet**.
-- The Solana program records baskets, shares, fees, lifecycle state and
-  immutable settlement receipts. It does **not** custody USDC or pUSD.
+Creators build onchain indexes around a specific thesis, while users gain diversified exposure through a single investment.
+
+Examples include:
+
+- AI Infrastructure
+- Solana Ecosystem
+- Semiconductors
+- Robotics
+- Stablecoin Adoption
+- Trump Trade
+- Energy
+- Any custom investment thesis
+
+---
+
+## Supported Asset Classes
+
+AlphaBasket is designed to support multiple onchain asset classes through a modular execution architecture.
+
+Current & Planned Integrations:
+
+- Tokenized Stocks
+- Crypto Assets
+- Prediction Markets
+- Perpetual Markets
+- Other programmable onchain assets
+
+---
+
+## Core Principles
+
+- Real asset backed portfolios
+- Fully onchain accounting
+- Modular execution adapters
+- Creator owned index strategies
+- Composable Solana native architecture
+
+---
+
+## Architecture
+
+AlphaBasket deliberately separates portfolio accounting from execution.
+
+The Accounting Engine remains unchanged regardless of where assets are traded.
+
+Execution adapters can plug into different liquidity venues while sharing the same accounting, portfolio, fee, and lifecycle logic.
+
+Current adapters:
+
+- Polymarket
+- Jupiter
+- XStocks
+- Phoenix
+
+## Vision
+
+Every investment starts with a thesis.
+
+Today, investors manually build portfolios around that thesis.
+
+AlphaBasket turns those ideas into programmable, investable onchain indexes.
+
+Our goal is to become the infrastructure layer for thesis driven investing on Solana.
+
+Built with ❤️ on Solana
 
 Configured devnet program ID:
 `5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm`.
