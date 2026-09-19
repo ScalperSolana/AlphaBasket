@@ -1,3 +1,4 @@
+import '@/styles/legacy-effects.css';
 import { BellRing, ChevronLeft, Clock3, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';

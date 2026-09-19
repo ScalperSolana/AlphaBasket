@@ -1,3 +1,4 @@
+import '@/styles/legacy-effects.css';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMemo, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';

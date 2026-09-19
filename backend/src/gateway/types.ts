@@ -2,7 +2,8 @@ export type GatewayRequestKind =
   | "fak_order"
   | "pusd_transfer"
   | "solana_split"
-  | "jupiter_swap";
+  | "jupiter_swap"
+  | "predict_order";
 
 export interface PreparedGatewayRequest {
   readonly requestKey: string;
@@ -40,7 +41,7 @@ export interface GatewayRequestStorePort {
     readonly requestKey: string;
     readonly requestHash: string;
     readonly sources: readonly Readonly<{
-      kind: "bridge_receipt" | "jupiter_swap";
+      kind: "bridge_receipt" | "jupiter_swap" | "predict_order";
       reference: string;
       amountUnits: bigint;
     }>[];
@@ -80,6 +81,8 @@ export interface GatewaySolanaSplitRequest {
   readonly sourceBridgeTransaction: string | null;
   readonly sourceBridgeAmountUnits?: bigint;
   readonly sourceJupiterTransactions?: readonly string[];
+  /** Finalized Predict sale transactions whose USDC credit funds this split. */
+  readonly sourcePredictTransactions?: readonly string[];
   readonly idleUsdcAmountUnits?: bigint;
   readonly mint: string;
   readonly userDestination: string;
@@ -115,6 +118,37 @@ export interface GatewayJupiterSwapResult {
   readonly status: "filled" | "partially_filled";
 }
 
+export interface GatewayPredictOrderRequest {
+  readonly requestHash: string;
+  readonly deploymentMode: "local" | "hybrid_devnet" | "production_canary" | "production";
+  readonly clientOrderId: string;
+  /** Decimal CTF token id of the composition item; echoed for attribution. */
+  readonly tokenId: string;
+  readonly jupiterMarketId: string;
+  readonly isYes: boolean;
+  readonly side: "buy" | "sell";
+  /** Buy: USDC to spend. Sell: contracts to sell. Six-decimal units. */
+  readonly amountUnits: bigint;
+  readonly worstPriceUnits: bigint;
+}
+
+export interface GatewayPredictOrderResult {
+  readonly requestHash: string;
+  readonly side: "buy" | "sell";
+  readonly tokenId: string;
+  readonly jupiterMarketId: string;
+  readonly orderPubkey: string;
+  readonly positionPubkey: string | null;
+  readonly requestedAmountUnits: bigint;
+  /** Buy: on-chain USDC debit. Sell: contracts sold. */
+  readonly filledInputUnits: bigint;
+  /** Buy: contracts received. Sell: on-chain USDC credit. */
+  readonly filledOutputUnits: bigint;
+  readonly transactionSignature: string;
+  readonly finalizedSlot: bigint;
+  readonly executedAtMs: bigint;
+}
+
 export interface ExecutionGatewayServicePort {
   signFakOrder(request: GatewayFakOrderRequest): Promise<GatewayFakOrderResult>;
   transferPusd(request: GatewayPusdTransferRequest): Promise<{
@@ -129,4 +163,7 @@ export interface ExecutionGatewayServicePort {
   executeJupiterSwap?(
     request: GatewayJupiterSwapRequest,
   ): Promise<GatewayJupiterSwapResult>;
+  executePredictOrder?(
+    request: GatewayPredictOrderRequest,
+  ): Promise<GatewayPredictOrderResult>;
 }

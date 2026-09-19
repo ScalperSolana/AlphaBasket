@@ -51,12 +51,17 @@ export interface WithdrawalWorkflowRequest {
   readonly weightedDepositTimestamp: bigint;
   readonly idlePusdUnits: bigint;
   readonly idleUsdcUnits?: bigint;
+  /** See DepositWorkflowRequest.predictionVenue. */
+  readonly predictionVenue?: "polymarket" | "jupiter_predict";
   readonly targets: readonly (
     WeightedExecutionTarget & ({
       readonly kind?: "prediction_market";
       readonly currentUnits: bigint;
       readonly worstSellPriceUnits: bigint;
       readonly negativeRisk: boolean;
+      readonly marketId?: string;
+      readonly conditionId?: string | null;
+      readonly outcomeIndex?: number;
     } | {
       readonly kind: "spot";
       readonly tokenMint: string;
@@ -129,6 +134,12 @@ export class WithdrawalWorkflow {
   }
 
   private async executeLocked(request: WithdrawalWorkflowRequest, signal: AbortSignal): Promise<WithdrawalWorkflowResult> {
+    const venue = request.predictionVenue ?? "polymarket";
+    if (venue === "jupiter_predict" && request.idlePusdUnits !== 0n) {
+      // A venue basket never accrues pUSD; a non-zero balance means this basket
+      // was built on the Polygon venue and must be withdrawn through it.
+      throw new Error("Jupiter Predict withdrawal cannot redeem a basket holding idle pUSD");
+    }
     const quote = request.intent.quote;
     const requestHash = executionRequestHash({
       kind: "withdrawal",
@@ -200,6 +211,9 @@ export class WithdrawalWorkflow {
           negativeRisk: source.negativeRisk,
           amountUnits: allocation.amountUnits,
           worstPriceUnits: source.worstSellPriceUnits,
+          ...(source.marketId === undefined ? {} : { marketId: source.marketId }),
+          ...(source.conditionId === undefined ? {} : { conditionId: source.conditionId }),
+          ...(source.outcomeIndex === undefined ? {} : { outcomeIndex: source.outcomeIndex }),
         });
         orders.push(order);
         await this.faults.after("withdrawal.fak_order_executed", {
@@ -261,6 +275,28 @@ export class WithdrawalWorkflow {
       }
       receipt = Object.freeze({
         amountUnits: 0n,
+        transactionSignature: null,
+        finalizedSlot: 0n,
+      });
+    } else if (venue === "jupiter_predict") {
+      // Predict sells settle straight into the settlement wallet as USDC; the
+      // finalized sale transactions themselves are the receipts the split
+      // claims, so no bridge leg exists.
+      bridgeAddress = "solana-native";
+      bridgeSourceTransaction = null;
+      bridgeObservedAtMs = orders.reduce(
+        (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
+        BigInt(request.now.getTime()),
+      );
+      if (operation.state === "trading_completed") {
+        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+          ...operation.checkpoint,
+          bridgeAddress,
+          bridgeObservedAtMs: bridgeObservedAtMs.toString(10),
+        }, request.now);
+      }
+      receipt = Object.freeze({
+        amountUnits: grossPusd,
         transactionSignature: null,
         finalizedSlot: 0n,
       });
@@ -382,11 +418,20 @@ export class WithdrawalWorkflow {
     );
     if (fees.userValueOut < quote.minValueOut) throw new Error("withdrawal user output is below the signed minimum");
     assertLeaseActive(signal);
+    const predictSaleTransactions = venue === "jupiter_predict"
+      ? orders.flatMap((order) => order.transactionHashes)
+      : [];
     const split = await this.splitter.distribute({
       idempotencyKey: `${request.operationId}:fee-split`,
       sourceBridgeTransaction: receipt.transactionSignature,
-      sourceBridgeAmountUnits: receipt.amountUnits,
+      // In the Solana-native venue the sale proceeds arrive through the predict
+      // transactions, not a bridge receipt; the amounts must reconcile against
+      // those claims instead.
+      sourceBridgeAmountUnits: venue === "jupiter_predict" ? 0n : receipt.amountUnits,
       sourceJupiterTransactions: jupiterSwaps.map((swap) => swap.transactionSignature),
+      ...(predictSaleTransactions.length === 0
+        ? {}
+        : { sourcePredictTransactions: predictSaleTransactions }),
       idleUsdcAmountUnits: idleUsdcAllocation,
       mint: request.solanaUsdcMint,
       userDestination: request.intent.destination.toBase58(),

@@ -45,6 +45,24 @@ export class LiveBridgeDepositFundingRoute implements DepositFundingRoutePort {
   }
 }
 
+/**
+ * Solana-native funding: every allocation leg (prediction through Jupiter
+ * Predict, spot through Jupiter, and idle) lands on the settlement wallet, so
+ * the "deposit address" is that wallet. Nothing external is called, which also
+ * stops spot-only deposits from creating unused Polymarket bridge addresses.
+ */
+export class SolanaNativeDepositFundingRoute implements DepositFundingRoutePort {
+  public constructor(private readonly settlementReceiver: string) {
+    if (settlementReceiver.length < 32 || settlementReceiver.length > 64) {
+      throw new TypeError("Solana settlement receiver is invalid");
+    }
+  }
+
+  public async createDepositFundingAddress(_polymarketWallet: string): Promise<string> {
+    return this.settlementReceiver;
+  }
+}
+
 /** Explicit non-live staging route retained for local integration tests only. */
 export class PrefundedStagingDepositFundingRoute implements DepositFundingRoutePort {
   public constructor(private readonly stagingDestination: string) {

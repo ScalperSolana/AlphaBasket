@@ -47,6 +47,9 @@ const basketAccountSchema = z.object({
     kind: z.union([
       z.object({ predictionMarket: z.unknown() }).passthrough(),
       z.object({ spot: z.unknown() }).passthrough(),
+      // Without this a basket holding a perpetual fails validation and vanishes
+      // from every quote path rather than erroring visibly.
+      z.object({ perp: z.unknown() }).passthrough(),
     ]),
   }).passthrough()).min(1).max(16),
 }).passthrough();
@@ -135,13 +138,27 @@ function statusIsActive(value: unknown): boolean {
 }
 
 export class PostgresQuoteContextStore implements QuoteContextPort {
+  private readonly nowMs: () => bigint;
+  private readonly predictionVenue: "disabled" | "jupiter_predict" | "polymarket";
+
   public constructor(
     private readonly sql: SqlClient,
     private readonly programId: PublicKey,
     private readonly maxNavAgeMs: bigint,
-    private readonly nowMs: () => bigint = () => BigInt(Date.now()),
+    options: Readonly<{
+      nowMs?: () => bigint;
+      /**
+       * Quotes for baskets holding prediction items are refused when no venue
+       * executes them; defaults to polymarket so existing wiring keeps its
+       * behavior.
+       */
+      predictionVenue?: "disabled" | "jupiter_predict" | "polymarket";
+    }> | (() => bigint) = {},
   ) {
     if (maxNavAgeMs <= 0n) throw new RangeError("maximum NAV age must be positive");
+    const parsed = typeof options === "function" ? { nowMs: options } : options;
+    this.nowMs = parsed.nowMs ?? (() => BigInt(Date.now()));
+    this.predictionVenue = parsed.predictionVenue ?? "polymarket";
   }
 
   public async loadLatest(basket: PublicKey, user: PublicKey): Promise<QuoteContext> {
@@ -216,6 +233,13 @@ export class PostgresQuoteContextStore implements QuoteContextPort {
             422,
             "perp_basket_unsupported",
             "perpetual baskets are not routed through this execution path",
+          );
+        }
+        if (!("spot" in item.kind) && this.predictionVenue === "disabled") {
+          throw new ApiRequestError(
+            422,
+            "prediction_venue_disabled",
+            "no prediction venue is enabled for this deployment",
           );
         }
         return Object.freeze({

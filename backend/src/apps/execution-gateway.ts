@@ -16,6 +16,7 @@ import { loadBackendConfig } from "../config/index.js";
 import {
   ClobOrderGateway,
   ExecutionGatewayService,
+  JupiterPredictOrderGateway,
   JupiterSwapGateway,
   PolygonPusdTransferGateway,
   PostgresGatewayRequestStore,
@@ -24,8 +25,10 @@ import {
   createExecutionGatewayHttpServer,
   solanaCapitalSplitMessageValidator,
   solanaJupiterSwapMessageValidator,
+  solanaPredictOrderMessageValidator,
   type PolygonTransferRpcPort,
 } from "../gateway/index.js";
+import { JupiterPredictRest } from "../predict/index.js";
 import { PgSqlClient } from "../persistence/index.js";
 import { JsonHttpClient } from "../polymarket/index.js";
 import { assertSolanaRpcCluster } from "../runtime/index.js";
@@ -48,16 +51,28 @@ if (
 }
 
 const gatewayToken = required(config.temporal.executionGatewayToken, "EXECUTION_GATEWAY_TOKEN");
-const polygonRpcUrl = required(config.polymarket.polygonRpcUrl, "POLYGON_RPC_URL");
-const executionWallet = getAddress(
-  required(config.polymarket.executionWallet, "POLYMARKET_EXECUTION_WALLET"),
-);
-const pusdToken = getAddress(
-  required(config.polymarket.pusdTokenAddress, "POLYMARKET_PUSD_TOKEN_ADDRESS"),
-);
+const predictionVenue = config.prediction.venue;
+// Polygon key material and RPCs exist only for the Polymarket venue; a
+// Solana-native gateway must start without any of it.
+const polygonRpcUrl = predictionVenue === "polymarket"
+  ? required(config.polymarket.polygonRpcUrl, "POLYGON_RPC_URL")
+  : undefined;
+const executionWallet = predictionVenue === "polymarket"
+  ? getAddress(required(config.polymarket.executionWallet, "POLYMARKET_EXECUTION_WALLET"))
+  : undefined;
+const pusdToken = predictionVenue === "polymarket"
+  ? getAddress(required(config.polymarket.pusdTokenAddress, "POLYMARKET_PUSD_TOKEN_ADDRESS"))
+  : undefined;
 const settlementOwner = new PublicKey(
   required(config.polymarket.solanaSettlementReceiver, "SOLANA_SETTLEMENT_RECEIVER"),
 );
+const predictProgramIds = config.jupiterPredict.programIds.map((id) => new PublicKey(id));
+if (predictionVenue === "jupiter_predict" && predictProgramIds.length === 0) {
+  throw new Error(
+    "JUPITER_PREDICT_PROGRAM_IDS is required when PREDICTION_VENUE=jupiter_predict: " +
+      "the settlement key only signs transactions whose programs are allowlisted",
+  );
+}
 const usdcMint = new PublicKey(config.solana.capital.usdcMint);
 const jupiterAggregatorProgram = new PublicKey(
   config.jupiter.aggregatorProgramId,
@@ -75,10 +90,10 @@ const sql = new PgSqlClient(pool);
 const httpClient = new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 15_000 });
 const signer = new PolicyEnforcedSigner({
   policies: [
-    {
-      role: "polymarket_order",
+    ...(predictionVenue !== "polymarket" ? [] : [{
+      role: "polymarket_order" as const,
       keyReference: config.signers.polymarketKeyId,
-      algorithm: "secp256k1",
+      algorithm: "secp256k1" as const,
       allowedDomains: new Set([
         "alphabasket:polymarket-order:v2",
         "alphabasket:polygon-transaction:v1",
@@ -89,17 +104,21 @@ const signer = new PolicyEnforcedSigner({
       requireExpiry: true,
       maxExpiryMs: 60_000,
       requiredContext: new Set(["intentHash"] as const),
-      validatePayload: (payload) => {
+      validatePayload: (payload: Uint8Array) => {
         if (payload.byteLength !== 32) throw new Error("Polygon signer accepts only a 32-byte EIP-712 or transaction digest");
       },
-    },
+    }]),
     {
-      role: "solana_settlement",
+      role: "solana_settlement" as const,
       keyReference: config.signers.solanaSettlementKeyId,
       algorithm: "ed25519",
       expectedPublicKey: settlementOwner.toBytes(),
       allowedDomains: new Set(["alphabasket:solana-capital-transaction:v1"]),
-      allowedActions: new Set(["split_withdrawal_usdc", "execute_jupiter_swap"]),
+      allowedActions: new Set([
+        "split_withdrawal_usdc",
+        "execute_jupiter_swap",
+        "execute_predict_order",
+      ]),
       allowedNetworks: new Set(["solana-mainnet-beta"]),
       maxPayloadBytes: 1_232,
       requireExpiry: true,
@@ -112,11 +131,17 @@ const signer = new PolicyEnforcedSigner({
               aggregatorProgramId: jupiterAggregatorProgram,
               maximumMessageBytes: 1_232,
             })
-          : solanaCapitalSplitMessageValidator({
-              sourceOwner: settlementOwner,
-              usdcMint,
-              maximumSplitUnits: config.executionGateway.maximumSplitUnits,
-            });
+          : context.action === "execute_predict_order"
+            ? solanaPredictOrderMessageValidator({
+                sourceOwner: settlementOwner,
+                allowedProgramIds: predictProgramIds,
+                maximumMessageBytes: 1_232,
+              })
+            : solanaCapitalSplitMessageValidator({
+                sourceOwner: settlementOwner,
+                usdcMint,
+                maximumSplitUnits: config.executionGateway.maximumSplitUnits,
+              });
         validator(payload);
       },
     },
@@ -128,17 +153,17 @@ const signer = new PolicyEnforcedSigner({
   auditSink: new PostgresSignerAuditSink(sql),
 });
 
-const polygonClient = createPublicClient({
+const polygonClient = predictionVenue !== "polymarket" ? undefined : createPublicClient({
   chain: polygon,
-  transport: http(polygonRpcUrl, { timeout: 15_000, retryCount: 0 }),
+  transport: http(polygonRpcUrl as string, { timeout: 15_000, retryCount: 0 }),
 });
-const polygonRpc: PolygonTransferRpcPort = {
-  getTransactionCount: (address) => polygonClient.getTransactionCount({
+const buildPolygonRpc = (client: NonNullable<typeof polygonClient>): PolygonTransferRpcPort => ({
+  getTransactionCount: (address) => client.getTransactionCount({
     address,
     blockTag: "pending",
   }),
   estimateFeesPerGas: async () => {
-    const fees = await polygonClient.estimateFeesPerGas();
+    const fees = await client.estimateFeesPerGas();
     if (fees.maxFeePerGas === undefined || fees.maxPriorityFeePerGas === undefined) {
       throw new Error("Polygon RPC did not return EIP-1559 fees");
     }
@@ -147,11 +172,11 @@ const polygonRpc: PolygonTransferRpcPort = {
       maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
     };
   },
-  estimateGas: (request) => polygonClient.estimateGas(request),
+  estimateGas: (request) => client.estimateGas(request),
   getFinalizedReceipt: async (hash) => {
     try {
-      const receipt = await polygonClient.getTransactionReceipt({ hash });
-      const head = await polygonClient.getBlockNumber();
+      const receipt = await client.getTransactionReceipt({ hash });
+      const head = await client.getBlockNumber();
       if (head < receipt.blockNumber || head - receipt.blockNumber + 1n < 12n) return null;
       return { status: receipt.status, blockNumber: receipt.blockNumber };
     } catch (error) {
@@ -159,18 +184,18 @@ const polygonRpc: PolygonTransferRpcPort = {
       throw error;
     }
   },
-  sendRawTransaction: (serializedTransaction) => polygonClient.sendRawTransaction({
+  sendRawTransaction: (serializedTransaction) => client.sendRawTransaction({
     serializedTransaction,
   }),
   waitForFinalizedReceipt: async (hash) => {
-    const receipt = await polygonClient.waitForTransactionReceipt({
+    const receipt = await client.waitForTransactionReceipt({
       hash,
       confirmations: 12,
       timeout: 180_000,
     });
     return { status: receipt.status, blockNumber: receipt.blockNumber };
   },
-};
+});
 
 const capitalConnection = new Connection(config.solana.capital.rpcUrl, {
   commitment: "confirmed",
@@ -184,11 +209,10 @@ await assertSolanaRpcCluster(
   "capital",
 );
 const store = new PostgresGatewayRequestStore(sql);
-const clobApiKey = required(config.polymarket.clobApiKey, "POLYMARKET_CLOB_API_KEY");
-const clob = new ClobOrderGateway(store, signer, {
+const clob = predictionVenue !== "polymarket" ? undefined : new ClobOrderGateway(store, signer, {
   deploymentMode: config.deployment.mode,
-  walletAddress: executionWallet,
-  apiKey: clobApiKey,
+  walletAddress: executionWallet as Address,
+  apiKey: required(config.polymarket.clobApiKey, "POLYMARKET_CLOB_API_KEY"),
   apiSecret: required(config.polymarket.clobApiSecret, "POLYMARKET_CLOB_API_SECRET"),
   apiPassphrase: required(
     config.polymarket.clobApiPassphrase,
@@ -200,13 +224,15 @@ const clob = new ClobOrderGateway(store, signer, {
   maximumMakerUnits: config.executionGateway.maximumMakerUnits,
   maximumTakerUnits: config.executionGateway.maximumTakerUnits,
 });
-const polygonTransfer = new PolygonPusdTransferGateway(store, signer, polygonRpc, {
-  deploymentMode: config.deployment.mode,
-  executionWallet: executionWallet as Address,
-  pusdToken,
-  maximumTransferUnits: config.executionGateway.maximumTransferUnits,
-  maximumNetworkFeeWei: config.executionGateway.maximumPolygonFeeWei,
-});
+const polygonTransfer = polygonClient === undefined
+  ? undefined
+  : new PolygonPusdTransferGateway(store, signer, buildPolygonRpc(polygonClient), {
+      deploymentMode: config.deployment.mode,
+      executionWallet: executionWallet as Address,
+      pusdToken: pusdToken as Address,
+      maximumTransferUnits: config.executionGateway.maximumTransferUnits,
+      maximumNetworkFeeWei: config.executionGateway.maximumPolygonFeeWei,
+    });
 const solanaSplit = new SolanaUsdcSplitGateway(store, signer, capitalConnection, {
   deploymentMode: config.deployment.mode,
   sourceOwner: settlementOwner,
@@ -227,7 +253,31 @@ const jupiter = config.jupiter.enabled
       baseUrl: config.jupiter.swapUrl,
     })
   : undefined;
-const service = new ExecutionGatewayService(clob, polygonTransfer, solanaSplit, jupiter);
+const predict = predictionVenue !== "jupiter_predict"
+  ? undefined
+  : new JupiterPredictOrderGateway(
+      store,
+      signer,
+      new JupiterPredictRest(httpClient, {
+        baseUrl: config.jupiterPredict.url,
+        apiKey: required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+      }),
+      capitalConnection,
+      {
+        deploymentMode: config.deployment.mode,
+        taker: settlementOwner,
+        usdcMint,
+        allowedProgramIds: predictProgramIds,
+        maximumOrderUnits: config.executionGateway.maximumPredictOrderUnits,
+        minimumOrderUnits: config.jupiterPredict.minimumOrderUnits,
+      },
+    );
+const service = new ExecutionGatewayService(solanaSplit, {
+  ...(clob === undefined ? {} : { clob }),
+  ...(polygonTransfer === undefined ? {} : { polygon: polygonTransfer }),
+  ...(jupiter === undefined ? {} : { jupiter }),
+  ...(predict === undefined ? {} : { predict }),
+});
 const server = createExecutionGatewayHttpServer({
   service,
   bearerToken: gatewayToken,
@@ -271,6 +321,6 @@ process.stdout.write(`${JSON.stringify({
   host: config.executionGateway.host,
   port: config.executionGateway.port,
   capitalCluster: config.deployment.capitalSolanaCluster,
-  polygonChainId: 137,
+  predictionVenue,
   jupiterSpotEnabled: config.jupiter.enabled,
 })}\n`);

@@ -51,12 +51,16 @@ The Accounting Engine remains unchanged regardless of where assets are traded.
 
 Execution adapters can plug into different liquidity venues while sharing the same accounting, portfolio, fee, and lifecycle logic.
 
-Current adapters:
+Current adapters, all Solana native:
 
-- Polymarket
-- Jupiter
-- XStocks
-- Phoenix
+- **Phoenix** for perpetual futures
+- **Jupiter** for crypto assets and tokenized stocks
+- **Jupiter Predict** for prediction markets, which serves Polymarket's markets
+  on Solana
+
+The original **Polymarket on Polygon** adapter (CLOB, bridge, pUSD) is still
+compiled and selectable with `PREDICTION_VENUE=polymarket`. Nothing was deleted;
+it is simply dark by default.
 
 ## Vision
 
@@ -173,6 +177,49 @@ canonical composition, and the program verifies that Ed25519 signature plus all
 structural constraints. Raw Polymarket depth and volume are not stored
 on-chain.
 
+## Prediction venue: Jupiter Predict
+
+`PREDICTION_VENUE` selects `jupiter_predict`, `polymarket` or `disabled`. On the
+Jupiter venue the prediction leg is Solana native end to end:
+
+- One Solana mainnet USDC transaction funds every leg. Prediction and spot both
+  land on `SOLANA_SETTLEMENT_RECEIVER`, so the workflow verifies one summed
+  delta per destination. No bridge, no pUSD, no Polygon wallet.
+- Orders run through `POST /v1/predict/order` on the execution gateway, which
+  refuses to sign past the runner's worst price, validates the built transaction
+  against `JUPITER_PREDICT_PROGRAM_IDS` and a sole-signer policy before the
+  settlement key signs, journals it for replay, requires Solana finality plus a
+  venue `filled` status, and verifies the cash leg against the finalized
+  transaction's own token deltas.
+- Withdrawal splits claim the finalized Predict sales as capital sources,
+  exactly as Jupiter swap receipts are claimed.
+- Unspent prediction cash is idle USDC; a basket still holding pUSD is refused
+  on this venue rather than half-settled.
+- On-chain identity is unchanged. Compositions keep their Polymarket
+  `conditionId` and `ctfTokenId`; `predict_market_links` maps a CTF token to the
+  Jupiter market and side, proven by a market probe or catalog scan and seedable
+  by an operator.
+- NAV marks and composer metrics read Jupiter Predict quotes through the same
+  market-data port the CLOB served.
+
+The Prediction API is in beta and leaves three things unpublished, so each is
+pinned by a test and verified at runtime rather than assumed: sells reuse
+`POST /orders` with `isBuy=false` carrying the contract amount, buy quantities
+come from the venue's `contractsMicro` quote while every cash leg is checked on
+chain, and there is no published program id, so the gateway refuses to start
+without an explicit allowlist. A shape change fails before anything signs.
+
+## Frontend
+
+`src/` is one page. Every index, your positions and the builder live at `/`,
+with an index or the builder opening as a panel over the list
+(`/index/:address`, `/create`). It reads the public read plane, quotes deposits
+and withdrawals, signs the intent with the connected wallet, and for deposits
+builds the single Solana mainnet USDC transaction from the backend's funding
+list on the capital RPC (`VITE_CAPITAL_SOLANA_RPC_URL`). Publishing a
+composition still needs the Composer signature, so the builder hands the
+operator a validated composition rather than posting it from the browser.
+
 ## Backend
 
 Location: `backend/`
@@ -213,6 +260,53 @@ reconciled against both.
 Financial mutations require idempotency keys. Composer and operations routes use
 separate bearer authentication.
 
+
+## Verification
+
+```bash
+npm --prefix backend run typecheck && npm --prefix backend test   # 211 tests
+cd solana-escrow && NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'
+```
+
+`anchor test` silently runs nothing under anchor-cli 1.x: it delegates to
+`surfpool` and still exits 0. The suite is bankrun based and needs no validator,
+so run mocha directly as above (52 tests).
+
+UI, end to end against the real API with no chain behind it:
+
+```bash
+npm install && npx playwright install chromium
+docker compose up -d postgres && npm run migrate:backend
+npm run dev:backend      # API on 127.0.0.1:3001
+npm run dev              # UI on localhost:8080
+npm run test:ui          # seeds demo rows, drives the UI, screenshots
+```
+
+`scripts/ui-e2e/run.mjs` seeds four demo indexes and three positions, injects a
+Wallet Standard wallet that signs with a deterministic key, and walks every
+screen: list, filters, search, the index panel, deposit and withdrawal quotes
+with exact figures, signing and submitting both intents, the builder, the wallet
+menu, disconnected and API-down states, a missing index, the 404, and a 390px
+viewport. It proves the read plane, the quote math shown to the user, and that
+the browser's intent bytes are what the backend verifies. It does not prove
+execution: a backend with no registered execution wallet refuses the signed
+intent, and the test asserts the UI recovers from that.
+
+## Devnet needs a redeploy before any canary
+
+Verified 2026-09-19: the account at the configured program ID holds a different,
+roughly 125-day-old program. It exports `FundBasket` and `SweepSurplus`, which no
+longer exist, and none of the v2 instructions (`initialize`, `complete_deposit`,
+`complete_phoenix_trade`, `publish_perp_eligibility_list` and the rest). It owns
+zero accounts and the current `config` PDA
+(`GEnKDYuWthH6P6Hzm2gmBEhMMfHGg4wgwPzcFNketWAY`) is absent, so nothing on devnet
+can be read or completed until it is upgraded. The upgrade authority is
+`FWTH3qY4r3Aa18jFY4yEMzYyMj2icVQ8u8UbGmWmuAc`.
+
+```bash
+solana program dump 5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm /tmp/devnet.so --url devnet
+strings -a /tmp/devnet.so | grep -oE 'Instruction: [A-Za-z]+' | sort -u
+```
 
 ## Security model
 

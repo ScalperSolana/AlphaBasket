@@ -1,3 +1,4 @@
+import '@/styles/legacy-effects.css';
 import { useWallet } from '@/contexts/WalletContext';
 import {
   getBasketsByOwner,

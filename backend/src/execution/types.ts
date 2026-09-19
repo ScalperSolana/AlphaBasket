@@ -55,9 +55,16 @@ export interface FakOrderRequest {
   readonly tokenId: string;
   readonly side: OrderSide;
   readonly negativeRisk: boolean;
-  /** BUY: pUSD to spend. SELL: outcome-token units to sell. */
+  /** BUY: venue cash to spend (pUSD or USDC). SELL: outcome-token units to sell. */
   readonly amountUnits: bigint;
   readonly worstPriceUnits: bigint;
+  /**
+   * Composition context the Jupiter Predict venue needs to resolve the market
+   * that trades this token. The CLOB venue ignores all three.
+   */
+  readonly marketId?: string;
+  readonly conditionId?: string | null;
+  readonly outcomeIndex?: number;
 }
 
 export interface FakOrderResult {
@@ -166,6 +173,8 @@ export interface SolanaAtomicSplitPort {
     readonly sourceBridgeTransaction: string | null;
     readonly sourceBridgeAmountUnits?: bigint;
     readonly sourceJupiterTransactions?: readonly string[];
+    /** Finalized Predict sale transactions whose USDC credit funds this split. */
+    readonly sourcePredictTransactions?: readonly string[];
     readonly idleUsdcAmountUnits?: bigint;
     readonly mint: string;
     readonly userDestination: string;
