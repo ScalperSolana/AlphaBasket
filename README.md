@@ -1,133 +1,82 @@
 # AlphaBasket
 
-AlphaBasket is a real-position basket protocol with share accounting on
-Solana. All three asset classes execute Solana-natively:
+AlphaBasket is a Solana native protocol for thesis driven investing.
 
-- **Phoenix** for perpetual futures.
-- **Jupiter** for spot crypto tokens and tokenized stocks.
-- **Jupiter Predict** for Polymarket prediction markets, served on Solana
-  through Jupiter's Prediction API (`PREDICTION_VENUE=jupiter_predict`).
+Instead of investing in individual assets, users invest in ideas.
 
-The current architecture deliberately separates accounting from capital:
+Creators build onchain indexes around a specific thesis, while users gain diversified exposure through a single investment.
 
-- The AlphaBasket program runs on **Solana devnet** during internal testing.
-- User USDC deposits and withdrawal payouts use **Solana mainnet-beta**.
-- Prediction, spot and perp trading all execute from the backend-controlled
-  **Solana mainnet settlement wallet**.
-- The original **Polymarket-on-Polygon** adapter (CLOB, bridge, pUSD) remains
-  compiled and selectable with `PREDICTION_VENUE=polymarket`; nothing was
-  deleted, it is simply dark by default.
-- The Solana program records baskets, shares, fees, lifecycle state and
-  immutable settlement receipts. It does **not** custody USDC or pUSD.
+Examples include:
+
+- AI Infrastructure
+- Solana Ecosystem
+- Semiconductors
+- Robotics
+- Stablecoin Adoption
+- Trump Trade
+- Energy
+- Any custom investment thesis
+
+---
+
+## Supported Asset Classes
+
+AlphaBasket is designed to support multiple onchain asset classes through a modular execution architecture.
+
+Current & Planned Integrations:
+
+- Tokenized Stocks
+- Crypto Assets
+- Prediction Markets
+- Perpetual Markets
+- Other programmable onchain assets
+
+---
+
+## Core Principles
+
+- Real asset backed portfolios
+- Fully onchain accounting
+- Modular execution adapters
+- Creator owned index strategies
+- Composable Solana native architecture
+
+---
+
+## Architecture
+
+AlphaBasket deliberately separates portfolio accounting from execution.
+
+The Accounting Engine remains unchanged regardless of where assets are traded.
+
+Execution adapters can plug into different liquidity venues while sharing the same accounting, portfolio, fee, and lifecycle logic.
+
+Current adapters, all Solana native:
+
+- **Phoenix** for perpetual futures
+- **Jupiter** for crypto assets and tokenized stocks
+- **Jupiter Predict** for prediction markets, which serves Polymarket's markets
+  on Solana
+
+The original **Polymarket on Polygon** adapter (CLOB, bridge, pUSD) is still
+compiled and selectable with `PREDICTION_VENUE=polymarket`. Nothing was deleted;
+it is simply dark by default.
+
+## Vision
+
+Every investment starts with a thesis.
+
+Today, investors manually build portfolios around that thesis.
+
+AlphaBasket turns those ideas into programmable, investable onchain indexes.
+
+Our goal is to become the infrastructure layer for thesis driven investing on Solana.
+
+Built with ❤️ on Solana
+
 
 Configured devnet program ID:
 `5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm`.
-
-## Current architecture
-
-The diagram and the two flows below describe the **Polymarket venue**
-(`PREDICTION_VENUE=polymarket`). With the default `jupiter_predict` venue the
-Bridge, CLOB and Polygon nodes disappear: prediction orders are Solana
-transactions signed by the gateway and settled in USDC at the settlement
-wallet, as described in "Prediction venue: Jupiter Predict".
-
-```mermaid
-flowchart LR
-    User["User wallet"]
-    API["AlphaBasket API"]
-    Bridge["Polymarket Bridge API"]
-    CLOB["Polymarket CLOB"]
-    Jupiter["Jupiter Swap / Price APIs"]
-    Polygon["Shared Polygon execution wallet"]
-    Settlement["Solana mainnet settlement wallet"]
-    Program["AlphaBasket program on devnet"]
-    Indexer["Indexer and NAV services"]
-    Gateway["Key-holding execution gateway"]
-    Signer["KMS / HSM signer"]
-
-    User -->|"signed intent"| API
-    User -->|"mainnet USDC deposit"| Bridge
-    Bridge -->|"pUSD credit"| Polygon
-    API --> Gateway
-    Gateway --> Signer
-    Gateway -->|"EIP-712 + HMAC FAK orders"| CLOB
-    Gateway -->|"signed Swap V2 transaction"| Jupiter
-    CLOB --> Polygon
-    Jupiter --> Settlement
-    Polygon -->|"pUSD withdrawal"| Bridge
-    Bridge -->|"mainnet USDC"| Settlement
-    Gateway -->|"user / creator / protocol split"| User
-    API -->|"complete_* accounting"| Program
-    Program --> Indexer
-    Indexer -->|"NAV and share state"| API
-```
-
-### Deposit flow
-
-1. The API creates a short-lived deposit quote and the user signs the exact
-   intent.
-2. The user submits one Solana-mainnet transaction containing:
-   - prediction allocation to the Polymarket bridge address;
-   - spot allocation to the mainnet settlement wallet; and
-   - the 0.5% deposit fee to the protocol destination.
-3. The backend verifies both finalized mainnet token-account deltas.
-4. The Bridge API converts prediction allocation to pUSD in the assigned
-   Polygon execution wallet.
-5. The worker submits prediction FAK buys and Jupiter spot swaps. Partial fills
-   are accepted; unspent pUSD and USDC remain attributed to the basket.
-6. The backend reloads a fresh off-chain NAV and submits `complete_deposit` to
-   the Solana-devnet program.
-7. The program verifies the user intent, backend authority, execution
-   attestation, limits and accounting math before minting internal shares.
-
-### Withdrawal flow
-
-1. The user signs a withdrawal intent for a specific share amount and minimum
-   output.
-2. The backend liquidates the basket pro rata using prediction FAK sells and
-   Jupiter spot-to-USDC swaps, including redeemed idle pUSD and USDC.
-3. Only realized pUSD is transferred through the Bridge API to the configured
-   Solana-mainnet settlement wallet.
-4. The backend verifies the finalized mainnet USDC receipt.
-5. The execution gateway atomically distributes mainnet USDC to the user,
-   creator and protocol.
-6. Only after those effects are verified does the backend submit
-   `complete_withdrawal` to the Solana-devnet program.
-
-The same split applies to protocol management-share redemption: capital moves
-on mainnet/Polygon while the accounting completion runs on devnet.
-
-## Prediction venue: Jupiter Predict
-
-With `PREDICTION_VENUE=jupiter_predict` the prediction leg is Solana-native
-end to end:
-
-- Deposits fund every leg (prediction, spot, fee) with one Solana mainnet USDC
-  transaction; prediction and spot both land on `SOLANA_SETTLEMENT_RECEIVER`,
-  and the workflow verifies the summed delta per destination. No bridge, no
-  pUSD, no Polygon wallet.
-- Buys and sells run through `POST /v1/predict/order` on the execution
-  gateway, which pre-checks the venue quote against the runner's worst price,
-  builds the transaction via Jupiter's Prediction API, validates it against
-  `JUPITER_PREDICT_PROGRAM_IDS` before the settlement key signs, journals it,
-  broadcasts, requires finality plus a venue `filled` status, and verifies the
-  USDC leg against the finalized transaction's token deltas.
-- Withdrawal splits claim the finalized Predict sale transactions themselves
-  as capital sources, exactly as Jupiter swap receipts are claimed.
-- Idle prediction cash is idle USDC (`idle_pusd_units` stays zero); a basket
-  holding legacy pUSD must be withdrawn through the Polymarket venue.
-- On-chain composition identity is unchanged (Polymarket `conditionId` and
-  `ctfTokenId`). The `predict_market_links` table maps a CTF token id to the
-  Jupiter market and side; links are proven by a market probe or catalog scan
-  and can be seeded by an operator for markets the scan cannot correlate.
-- NAV marks and composer metrics read Jupiter Predict quotes through the same
-  market-data port the CLOB served.
-
-The Prediction API is in beta. Two shapes are pinned by tests and verified at
-runtime rather than assumed: sells reuse `POST /orders` with `isBuy=false`
-carrying the contract amount, and buy contract quantities come from the
-venue's `contractsMicro` quote (cash legs are always on-chain-verified). A
-shape change fails loudly before anything is signed.
 
 ## Share accounting and fees
 
@@ -150,7 +99,7 @@ Current fee model:
 | Mature withdrawal | Protocol | 1% at or after 60 days |
 | Performance | Creator | 0–20%, default 10%, charged only on redeemed-share profit |
 
-Management fees do not sell Polymarket positions. The program mints protocol
+Management fees do not sell Basket positions. The program mints protocol
 shares, diluting the existing supply. A scheduled keeper accrues active baskets,
 and every financial/lifecycle instruction provides a lazy-accrual fallback.
 
@@ -228,6 +177,49 @@ canonical composition, and the program verifies that Ed25519 signature plus all
 structural constraints. Raw Polymarket depth and volume are not stored
 on-chain.
 
+## Prediction venue: Jupiter Predict
+
+`PREDICTION_VENUE` selects `jupiter_predict`, `polymarket` or `disabled`. On the
+Jupiter venue the prediction leg is Solana native end to end:
+
+- One Solana mainnet USDC transaction funds every leg. Prediction and spot both
+  land on `SOLANA_SETTLEMENT_RECEIVER`, so the workflow verifies one summed
+  delta per destination. No bridge, no pUSD, no Polygon wallet.
+- Orders run through `POST /v1/predict/order` on the execution gateway, which
+  refuses to sign past the runner's worst price, validates the built transaction
+  against `JUPITER_PREDICT_PROGRAM_IDS` and a sole-signer policy before the
+  settlement key signs, journals it for replay, requires Solana finality plus a
+  venue `filled` status, and verifies the cash leg against the finalized
+  transaction's own token deltas.
+- Withdrawal splits claim the finalized Predict sales as capital sources,
+  exactly as Jupiter swap receipts are claimed.
+- Unspent prediction cash is idle USDC; a basket still holding pUSD is refused
+  on this venue rather than half-settled.
+- On-chain identity is unchanged. Compositions keep their Polymarket
+  `conditionId` and `ctfTokenId`; `predict_market_links` maps a CTF token to the
+  Jupiter market and side, proven by a market probe or catalog scan and seedable
+  by an operator.
+- NAV marks and composer metrics read Jupiter Predict quotes through the same
+  market-data port the CLOB served.
+
+The Prediction API is in beta and leaves three things unpublished, so each is
+pinned by a test and verified at runtime rather than assumed: sells reuse
+`POST /orders` with `isBuy=false` carrying the contract amount, buy quantities
+come from the venue's `contractsMicro` quote while every cash leg is checked on
+chain, and there is no published program id, so the gateway refuses to start
+without an explicit allowlist. A shape change fails before anything signs.
+
+## Frontend
+
+`src/` is one page. Every index, your positions and the builder live at `/`,
+with an index or the builder opening as a panel over the list
+(`/index/:address`, `/create`). It reads the public read plane, quotes deposits
+and withdrawals, signs the intent with the connected wallet, and for deposits
+builds the single Solana mainnet USDC transaction from the backend's funding
+list on the capital RPC (`VITE_CAPITAL_SOLANA_RPC_URL`). Publishing a
+composition still needs the Composer signature, so the builder hands the
+operator a validated composition rather than posting it from the browser.
+
 ## Backend
 
 Location: `backend/`
@@ -240,7 +232,6 @@ Location: `backend/`
 | `server` | Quote, intent, funding, operation-status and basket APIs |
 | `execution` | Durable operation state machine, allocation and attestations |
 | `phoenix` | Phoenix perpetual units, sizing, market selection and post-execution verification |
-| `predict` | Jupiter Predict client, market links/resolution, market data and Solana-native prediction execution |
 | `deposits` / `withdrawals` | Hybrid bridge, FAK/Jupiter execution and `complete_*` workflows |
 | `gateway` | CLOB/Jupiter signing, Polygon transfers and Solana-mainnet fee distribution |
 | `jupiter` | Verified token admission, Swap V2 execution and Price V3 marks |
@@ -269,171 +260,52 @@ reconciled against both.
 Financial mutations require idempotency keys. Composer and operations routes use
 separate bearer authentication.
 
-## Hybrid environment
-
-Copy `backend/.env.example` to `backend/.env` and configure at least:
-
-```text
-DEPLOYMENT_MODE=hybrid_devnet
-
-PREDICTION_VENUE=jupiter_predict
-JUPITER_PREDICT_PROGRAM_IDS=<Predict program ids the settlement key may sign>
-
-ACCOUNTING_SOLANA_CLUSTER=devnet
-ACCOUNTING_SOLANA_RPC_URL=<Solana devnet RPC>
-
-CAPITAL_SOLANA_CLUSTER=mainnet-beta
-CAPITAL_SOLANA_RPC_URL=<Solana mainnet RPC>
-CAPITAL_SOLANA_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-
-CAPITAL_MODE=live_bridge
-POLYGON_CHAIN_ID=137
-POLYGON_RPC_URL=<Polygon mainnet RPC>
-
-POLYMARKET_CLOB_API_KEY=<CLOB API key>
-POLYMARKET_CLOB_API_SECRET=<CLOB API secret>
-POLYMARKET_CLOB_API_PASSPHRASE=<CLOB passphrase>
-POLYMARKET_EXECUTION_WALLET=<Polygon execution wallet>
-POLYMARKET_PUSD_TOKEN_ADDRESS=<Polygon pUSD token>
-SOLANA_SETTLEMENT_RECEIVER=<Solana mainnet settlement owner>
-
-JUPITER_SPOT_ENABLED=true
-JUPITER_API_KEY=<Jupiter API key>
-JUPITER_TOKENS_URL=https://api.jup.ag/tokens/v2
-JUPITER_SWAP_URL=https://api.jup.ag/swap/v2
-JUPITER_PRICE_URL=https://api.jup.ag/price/v3
-
-EXECUTION_GATEWAY_URL=<internal gateway URL>
-EXECUTION_GATEWAY_TOKEN=<random 32+ character secret>
-REMOTE_SIGNER_URL=<remote signing service>
-REMOTE_SIGNER_TOKEN=<random 32+ character secret>
-```
-
-The backend rejects hybrid startup unless:
-
-- accounting is labelled devnet;
-- capital is labelled mainnet-beta;
-- capital mode is `live_bridge`;
-- Polymarket uses Polygon chain ID 137; and
-- accounting and capital use different RPC URLs.
-
-Public-network workers also verify each RPC's genesis hash, preventing an
-endpoint labelled as devnet from silently pointing to mainnet or vice versa.
-
-## Running the backend
-
-Requirements:
-
-- Node.js 22 or newer.
-- PostgreSQL 16 or compatible.
-- Temporal.
-- Solana CLI and Anchor 0.32.1 for program development.
-- The included loopback development signer for internal testing, or an external
-  KMS/HSM signer endpoint for production.
-
-Install and migrate:
-
-```bash
-npm install
-npm --prefix backend install
-npm run migrate:backend
-```
-
-Start production-style processes in this order:
-
-```bash
-npm run start:indexer:backend
-npm run start:nav:backend
-npm run start:remote-signer:backend
-npm run start:execution-gateway:backend
-npm run start:execution-dispatcher:backend
-npm run start:execution:backend
-npm run start:lifecycle:backend
-npm run start:backend
-```
-
-Development equivalents use the `dev:*:backend` scripts in the root
-`package.json`.
-
-The API listens on `127.0.0.1:3001`, the execution gateway on
-`127.0.0.1:3002`, and the internal-testing remote signer on
-`127.0.0.1:3003` by default. Generate its ignored mode-`0600` keyring first:
-
-```bash
-mkdir -p backend/.remote-signer
-npm run signer:keyring:generate:backend -- \
-  --output /absolute/path/to/AlphaBasket/backend/.remote-signer/keyring.json
-```
-
-The command prints only public identities to place in
-`POLYMARKET_EXECUTION_WALLET`, `SOLANA_SETTLEMENT_RECEIVER`,
-`COMPOSER_SIGNER_PUBLIC_KEY`, and `BACKEND_SIGNER_PUBLIC_KEY`. Full setup and
-the program-key mapping are documented in
-[`backend/README.md`](backend/README.md#remote-signer-for-internal-testing).
 
 ## Verification
 
-UI, end to end against the real API (no chain needed):
-
 ```bash
-npm install                                  # installs playwright
-npx playwright install chromium              # once
-docker compose up -d postgres                # or any Postgres the backend can reach
-npm run migrate:backend
-npm run dev:backend                          # API on 127.0.0.1:3001
-npm run dev                                  # UI on localhost:8080
-npm run test:ui                              # seeds demo rows, drives the UI, screenshots
+npm --prefix backend run typecheck && npm --prefix backend test   # 211 tests
+cd solana-escrow && NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'
 ```
 
-`scripts/ui-e2e/run.mjs` seeds three demo indexes and two positions
-(`scripts/ui-e2e/seed-demo.sql`, all tagged `source_slot = 999000000`),
-injects a Wallet Standard wallet that signs with a deterministic key, and
-walks every screen: list, filters, search, the index panel, deposit and
-withdrawal quotes with exact figures, signing and submitting both intents,
-the builder's validation, the wallet menu, disconnected and API-down states,
-a missing index, the 404, and a 390px viewport. It proves the read plane,
-the quote math shown to the user, and that the browser's intent bytes are
-what the backend verifies. It does not prove execution: a backend with no
-registered execution wallet refuses the signed intent, and the test asserts
-the UI recovers from that. `PSQL` and `APP_URL` override the defaults.
+`anchor test` silently runs nothing under anchor-cli 1.x: it delegates to
+`surfpool` and still exits 0. The suite is bankrun based and needs no validator,
+so run mocha directly as above (52 tests).
 
-For a real cycle, run the full hybrid stack (`start:*` scripts below), let
-the indexer project real baskets, and deposit from the UI with a wallet
-holding mainnet USDC; the panel then polls the operation to `completed` and
-your position appears at `/`.
-
-Backend:
+UI, end to end against the real API with no chain behind it:
 
 ```bash
-npm --prefix backend run typecheck
-npm --prefix backend test
-npm --prefix backend run idl:check
-npm --prefix backend audit --omit=dev
+npm install && npx playwright install chromium
+docker compose up -d postgres && npm run migrate:backend
+npm run dev:backend      # API on 127.0.0.1:3001
+npm run dev              # UI on localhost:8080
+npm run test:ui          # seeds demo rows, drives the UI, screenshots
 ```
 
-Contract:
+`scripts/ui-e2e/run.mjs` seeds four demo indexes and three positions, injects a
+Wallet Standard wallet that signs with a deterministic key, and walks every
+screen: list, filters, search, the index panel, deposit and withdrawal quotes
+with exact figures, signing and submitting both intents, the builder, the wallet
+menu, disconnected and API-down states, a missing index, the 404, and a 390px
+viewport. It proves the read plane, the quote math shown to the user, and that
+the browser's intent bytes are what the backend verifies. It does not prove
+execution: a backend with no registered execution wallet refuses the signed
+intent, and the test asserts the UI recovers from that.
+
+## Devnet needs a redeploy before any canary
+
+Verified 2026-09-19: the account at the configured program ID holds a different,
+roughly 125-day-old program. It exports `FundBasket` and `SweepSurplus`, which no
+longer exist, and none of the v2 instructions (`initialize`, `complete_deposit`,
+`complete_phoenix_trade`, `publish_perp_eligibility_list` and the rest). It owns
+zero accounts and the current `config` PDA
+(`GEnKDYuWthH6P6Hzm2gmBEhMMfHGg4wgwPzcFNketWAY`) is absent, so nothing on devnet
+can be read or completed until it is upgraded. The upgrade authority is
+`FWTH3qY4r3Aa18jFY4yEMzYyMj2icVQ8u8UbGmWmuAc`.
 
 ```bash
-cd solana-escrow
-anchor build
-anchor test
-```
-
-`anchor test` requires anchor-cli 0.32.1. Under a newer CLI (1.x) it silently
-delegates to `surfpool` and runs nothing while still exiting 0; run the suite
-directly instead — it is bankrun-based and needs no validator:
-
-```bash
-cd solana-escrow
-NODE_OPTIONS='--import tsx' npx mocha -t 1000000 'tests/**/*.ts'
-```
-
-Check the configured devnet deployment:
-
-```bash
-solana program show \
-  5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm \
-  --url devnet
+solana program dump 5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm /tmp/devnet.so --url devnet
+strings -a /tmp/devnet.so | grep -oE 'Instruction: [A-Za-z]+' | sort -u
 ```
 
 ## Security model
@@ -457,65 +329,3 @@ solana program show \
 - Hybrid mode moves real mainnet capital and therefore uses the same allowlists,
   caps and reconciliation controls as a production canary.
 
-## Current integration status
-
-The contract, backend domain logic, API routes, workers, execution gateway,
-management-fee automation, reconciliation and security tests are implemented.
-
-Before a live hybrid test, operators must still:
-
-1. connect real devnet/mainnet/Polygon RPCs;
-2. generate the loopback development keyring for internal testing, or provision
-   the production KMS/HSM signer roles;
-3. configure CLOB credentials and required Polymarket token approvals;
-4. configure a Jupiter API key, official mainnet USDC mint and vetted spot
-   mints;
-5. register/fund the execution and settlement wallets;
-6. apply migrations and start PostgreSQL/Temporal/workers;
-7. **redeploy the program to devnet.** As of 2026-09-19 the account at
-   `5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm` holds a different, roughly
-   125-day-old program: it exports `FundBasket` and `SweepSurplus`, which no
-   longer exist, and exports none of the v2 instructions (`initialize`,
-   `complete_deposit`, `complete_phoenix_trade`, `publish_perp_eligibility_list`
-   and the rest). It owns **zero** accounts and the current `config` PDA
-   (`GEnKDYuWthH6P6Hzm2gmBEhMMfHGg4wgwPzcFNketWAY`) is absent, so nothing on
-   devnet can be read or completed until it is upgraded. The upgrade authority
-   is `FWTH3qY4r3Aa18jFY4yEMzYyMj2icVQ8u8UbGmWmuAc`. Verify with:
-
-   ```bash
-   solana program dump 5mzLoAijdzAQV5D7QXe6TTGZ9TkWQanygfnb5VPPxFSm /tmp/devnet.so --url devnet
-   strings -a /tmp/devnet.so | grep -oE 'Instruction: [A-Za-z]+' | sort -u
-   ```
-
-8. execute low-value prediction-only, spot-only and mixed deposit/withdrawal
-   canaries.
-
-The React frontend (`src/`) is one page: every index, your positions and the
-builder live at `/`, with an index or the builder opening as a panel over the
-list (`/index/:address`, `/create`). It reads the public read plane, quotes
-deposits and withdrawals, signs the intent with the connected wallet, and for
-deposits builds the single Solana-mainnet USDC transaction from the backend's
-funding list on the capital RPC (`VITE_CAPITAL_SOLANA_RPC_URL`). Perpetual
-indexes are shown but not investable until the Phoenix execution path opens;
-the backend refuses them with `perp_basket_unsupported`. Publishing a
-composition still runs through the Composer, so the builder hands the operator
-a validated composition rather than posting it from the browser.
-
-Production Composer TODO:
-
-1. Wire authoritative Gamma market sourcing into the backend.
-2. Connect a trusted classifier for thematic relevance and outcome clarity.
-3. Fetch and verify current price, spread, depth and volume directly from the
-   CLOB before composing a basket.
-4. Restrict caller-prepared candidate data to internal-testing environments;
-   production must not sign caller-supplied liquidity or classification claims.
-5. Add a full Gamma → classifier → CLOB → filtering/weighting → signed
-   composition → devnet/mainnet `create_basket` integration test.
-
-Detailed backend operations are documented in
-[`backend/README.md`](backend/README.md) and
-[`backend/docs/phase-5-6-runbook.md`](backend/docs/phase-5-6-runbook.md).
-
-Legacy quote-signer, settler and escrow-oriented directories may remain in the
-repository for reference, but they are not the active AlphaBasket execution
-path described above.
