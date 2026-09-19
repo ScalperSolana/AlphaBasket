@@ -38,6 +38,7 @@ const splitSchema = z.object({
   sourceBridgeTransaction: transactionSignature.nullable(),
   sourceBridgeAmountUnits: canonicalUnsigned.optional(),
   sourceJupiterTransactions: z.array(transactionSignature).max(64).optional(),
+  sourcePredictTransactions: z.array(transactionSignature).max(64).optional(),
   idleUsdcAmountUnits: canonicalUnsigned.optional(),
   mint: solanaAddress,
   userDestination: solanaAddress,
@@ -56,6 +57,17 @@ const jupiterSwapSchema = z.object({
   inputAmountUnits: positiveUnsigned,
   slippageBps: z.number().int().min(1).max(2_000),
   taker: solanaAddress,
+}).strict();
+const predictOrderSchema = z.object({
+  requestHash: hash,
+  deploymentMode: mode,
+  clientOrderId: z.string().min(40).max(160),
+  tokenId: z.string().regex(/^(?:0|[1-9][0-9]*)$/u),
+  jupiterMarketId: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/u),
+  isYes: z.boolean(),
+  side: z.enum(["buy", "sell"]),
+  amountUnits: positiveUnsigned,
+  worstPriceUnits: positiveUnsigned,
 }).strict();
 
 function tokenDigest(token: string): Buffer {
@@ -163,6 +175,9 @@ export function createExecutionGatewayHttpServer(options: {
           ...(parsed.data.sourceJupiterTransactions === undefined
             ? {}
             : { sourceJupiterTransactions: parsed.data.sourceJupiterTransactions }),
+          ...(parsed.data.sourcePredictTransactions === undefined
+            ? {}
+            : { sourcePredictTransactions: parsed.data.sourcePredictTransactions }),
           ...(parsed.data.idleUsdcAmountUnits === undefined
             ? {}
             : { idleUsdcAmountUnits: parsed.data.idleUsdcAmountUnits }),
@@ -193,6 +208,23 @@ export function createExecutionGatewayHttpServer(options: {
           filledInputUnits: result.filledInputUnits.toString(10),
           filledOutputUnits: result.filledOutputUnits.toString(10),
           minimumOutputUnits: result.minimumOutputUnits.toString(10),
+          finalizedSlot: result.finalizedSlot.toString(10),
+          executedAtMs: result.executedAtMs.toString(10),
+        });
+        return;
+      }
+      if (request.url === "/v1/predict/order") {
+        const parsed = predictOrderSchema.safeParse(raw);
+        if (!parsed.success) throw new GatewayHttpError(400, "invalid_request");
+        if (options.service.executePredictOrder === undefined) {
+          throw new GatewayHttpError(404, "predict_execution_disabled");
+        }
+        const result = await options.service.executePredictOrder(parsed.data);
+        writeJson(response, 200, {
+          ...result,
+          requestedAmountUnits: result.requestedAmountUnits.toString(10),
+          filledInputUnits: result.filledInputUnits.toString(10),
+          filledOutputUnits: result.filledOutputUnits.toString(10),
           finalizedSlot: result.finalizedSlot.toString(10),
           executedAtMs: result.executedAtMs.toString(10),
         });

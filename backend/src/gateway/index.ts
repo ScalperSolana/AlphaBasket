@@ -8,3 +8,4 @@ export * from "./http-server.js";
 export * from "./solana-message-policy.js";
 export * from "./jupiter-swap-service.js";
 export * from "./jupiter-finality.js";
+export * from "./predict-order-service.js";

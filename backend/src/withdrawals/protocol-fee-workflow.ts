@@ -45,12 +45,17 @@ export interface ProtocolFeeWithdrawalRequest {
   readonly totalSharesOutstanding: bigint;
   readonly idlePusdUnits: bigint;
   readonly idleUsdcUnits?: bigint;
+  /** See DepositWorkflowRequest.predictionVenue. */
+  readonly predictionVenue?: "polymarket" | "jupiter_predict";
   readonly targets: readonly (
     WeightedExecutionTarget & ({
       readonly kind?: "prediction_market";
       readonly currentUnits: bigint;
       readonly worstSellPriceUnits: bigint;
       readonly negativeRisk: boolean;
+      readonly marketId?: string;
+      readonly conditionId?: string | null;
+      readonly outcomeIndex?: number;
     } | {
       readonly kind: "spot";
       readonly tokenMint: string;
@@ -109,6 +114,10 @@ export class ProtocolFeeWithdrawalWorkflow {
   }
 
   private async executeLocked(request: ProtocolFeeWithdrawalRequest, signal: AbortSignal): Promise<ProtocolFeeWithdrawalResult> {
+    const venue = request.predictionVenue ?? "polymarket";
+    if (venue === "jupiter_predict" && request.idlePusdUnits !== 0n) {
+      throw new Error("Jupiter Predict protocol redemption cannot touch a basket holding idle pUSD");
+    }
     if (request.shareAmount <= 0n || request.shareAmount > request.protocolFeeShares) throw new RangeError("protocol share redemption exceeds available protocol shares");
     const navHash = bytes32(request.navReportHash, "navReportHash");
     const requestHash = executionRequestHash({
@@ -175,6 +184,9 @@ export class ProtocolFeeWithdrawalWorkflow {
           negativeRisk: source.negativeRisk,
           amountUnits: allocation.amountUnits,
           worstPriceUnits: source.worstSellPriceUnits,
+          ...(source.marketId === undefined ? {} : { marketId: source.marketId }),
+          ...(source.conditionId === undefined ? {} : { conditionId: source.conditionId }),
+          ...(source.outcomeIndex === undefined ? {} : { outcomeIndex: source.outcomeIndex }),
         });
         orders.push(order);
         await this.faults.after("protocol_fee.fak_order_executed", {
@@ -237,6 +249,27 @@ export class ProtocolFeeWithdrawalWorkflow {
       }
       receipt = Object.freeze({
         amountUnits: 0n,
+        transactionSignature: null,
+        finalizedSlot: 0n,
+      });
+    } else if (venue === "jupiter_predict") {
+      // Predict sells settle straight into the settlement wallet as USDC; the
+      // finalized sale transactions are the receipts the transfer claims.
+      bridgeAddress = "solana-native";
+      bridgeSourceTransaction = null;
+      bridgeObservedAtMs = orders.reduce(
+        (latest, order) => order.executedAtMs > latest ? order.executedAtMs : latest,
+        BigInt(request.now.getTime()),
+      );
+      if (operation.state === "trading_completed") {
+        operation = await this.operations.transition(operation.id, operation.version, "bridge_pending", {
+          ...operation.checkpoint,
+          bridgeAddress,
+          bridgeObservedAtMs: bridgeObservedAtMs.toString(10),
+        }, request.now);
+      }
+      receipt = Object.freeze({
+        amountUnits: grossPusd,
         transactionSignature: null,
         finalizedSlot: 0n,
       });
@@ -331,12 +364,18 @@ export class ProtocolFeeWithdrawalWorkflow {
     );
     if (grossRealized < refreshedMinimumGross) throw new Error("protocol redemption is below the refreshed on-chain slippage floor");
     assertLeaseActive(signal);
+    const predictSaleTransactions = venue === "jupiter_predict"
+      ? orders.flatMap((order) => order.transactionHashes)
+      : [];
     const distribution = await this.splitter.distribute({
       idempotencyKey: `${request.operationId}:protocol-transfer`,
       sourceBridgeTransaction: receipt.transactionSignature,
-      sourceBridgeAmountUnits: receipt.amountUnits,
+      sourceBridgeAmountUnits: venue === "jupiter_predict" ? 0n : receipt.amountUnits,
       sourceJupiterTransactions:
         jupiterSwaps.map((swap) => swap.transactionSignature),
+      ...(predictSaleTransactions.length === 0
+        ? {}
+        : { sourcePredictTransactions: predictSaleTransactions }),
       idleUsdcAmountUnits: idleUsdcAllocation,
       mint: request.solanaUsdcMint,
       userDestination: request.protocolDestination,

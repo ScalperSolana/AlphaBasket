@@ -565,8 +565,14 @@ function executionContextFingerprint(context: FinancialExecutionContext): string
 export interface FinancialExecutionRunnerOptions {
   readonly capitalMode: "prefunded_staging" | "live_bridge";
   readonly solanaSettlementReceiver: string;
-  readonly polymarketSolanaChainId: string;
+  /**
+   * Required by the Polymarket bridge when creating withdrawal addresses;
+   * unused when the prediction venue is Solana-native.
+   */
+  readonly polymarketSolanaChainId?: string;
   readonly capitalUsdcMint: string;
+  /** Which venue executes prediction targets; defaults to the Polygon path. */
+  readonly predictionVenue?: "polymarket" | "jupiter_predict";
 }
 
 export class FinancialExecutionOperationRunner implements ExecutionOperationRunnerPort {
@@ -634,6 +640,7 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
         spotFundingDestination: this.options.solanaSettlementReceiver,
         fundingTransactionSignature: request.fundingTransactionSignature,
         maxSlippageBps: quote.maxSlippageBps,
+        predictionVenue: this.options.predictionVenue ?? "polymarket",
         targets: context.targets.map((target, index) => target.kind === "spot"
           ? Object.freeze({
               kind: "spot" as const,
@@ -647,12 +654,18 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
               weightBps: target.weightBps,
               worstBuyPriceUnits: buyBound(books[index] as OrderBook, quote.maxSlippageBps),
               negativeRisk: (books[index] as OrderBook).negativeRisk,
+              marketId: target.marketId,
+              conditionId: target.conditionId,
+              outcomeIndex: target.outcomeIndex,
             })),
         settlementNonce: context.lastSettlementNonce + 1n,
         capitalMode: this.options.capitalMode,
         beforeExecution: async () => {
           await assertFreshContext();
-          if (this.options.capitalMode === "prefunded_staging") {
+          if (
+            this.options.capitalMode === "prefunded_staging" &&
+            (this.options.predictionVenue ?? "polymarket") === "polymarket"
+          ) {
             if (this.pusdBalance === null) {
               throw new Error("prefunded staging requires Polygon pUSD balance verification");
             }
@@ -708,6 +721,7 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
         weightedDepositTimestamp: context.weightedDepositTimestamp,
         idlePusdUnits: context.idlePusdUnits,
         idleUsdcUnits: context.idleUsdcUnits,
+        predictionVenue: this.options.predictionVenue ?? "polymarket",
         targets: context.targets.map((target, index) => target.kind === "spot"
           ? Object.freeze({
               kind: "spot" as const,
@@ -723,6 +737,9 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
               currentUnits: target.currentUnits,
               worstSellPriceUnits: sellBound(books[index] as OrderBook, quote.maxSlippageBps),
               negativeRisk: (books[index] as OrderBook).negativeRisk,
+              marketId: target.marketId,
+              conditionId: target.conditionId,
+              outcomeIndex: target.outcomeIndex,
             })),
         performanceFeeBps: context.performanceFeeBps,
         maxSlippageBps: quote.maxSlippageBps,
@@ -730,7 +747,7 @@ export class FinancialExecutionOperationRunner implements ExecutionOperationRunn
         protocolDestination: context.protocolFeeDestination.toBase58(),
         solanaSettlementReceiver: this.options.solanaSettlementReceiver,
         solanaUsdcMint: context.settlementMint.toBase58(),
-        solanaChainId: this.options.polymarketSolanaChainId,
+        solanaChainId: this.options.polymarketSolanaChainId ?? "solana-native",
         settlementNonce: context.lastSettlementNonce + 1n,
         capitalMode: this.options.capitalMode,
         beforeExecution: assertFreshContext,

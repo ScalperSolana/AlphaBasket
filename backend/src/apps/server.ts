@@ -49,6 +49,7 @@ import {
 import {
   AlphaBasketApiService,
   LiveBridgeDepositFundingRoute,
+  SolanaNativeDepositFundingRoute,
   JupiterSpotCompositionAdmission,
   PostgresFinancialRequestStore,
   PostgresQuoteContextStore,
@@ -204,22 +205,33 @@ const walletRoutes = new StickyExecutionWalletRoute(
   ),
   walletRegistry,
 );
-const fundingRoutes = config.deployment.capitalMode === "live_bridge"
-  ? new LiveBridgeDepositFundingRoute(new PolymarketBridgeRest(http, {
-      baseUrl: config.polymarket.bridgeUrl,
-      ...(config.polymarket.builderCode === undefined ? {} : { builderCode: config.polymarket.builderCode }),
-    }))
-  : new PrefundedStagingDepositFundingRoute(
+// Only the Polymarket venue funds prediction execution through the bridge.
+// Every other venue funds all legs at the Solana settlement wallet, which also
+// stops spot-only deposits from creating unused bridge addresses.
+const fundingRoutes = config.prediction.venue !== "polymarket"
+  ? new SolanaNativeDepositFundingRoute(
       required(
-        config.polymarket.stagingSolanaFundingDestination,
-        "STAGING_SOLANA_FUNDING_DESTINATION",
+        config.polymarket.solanaSettlementReceiver,
+        "SOLANA_SETTLEMENT_RECEIVER",
       ),
-    );
+    )
+  : config.deployment.capitalMode === "live_bridge"
+    ? new LiveBridgeDepositFundingRoute(new PolymarketBridgeRest(http, {
+        baseUrl: config.polymarket.bridgeUrl,
+        ...(config.polymarket.builderCode === undefined ? {} : { builderCode: config.polymarket.builderCode }),
+      }))
+    : new PrefundedStagingDepositFundingRoute(
+        required(
+          config.polymarket.stagingSolanaFundingDestination,
+          "STAGING_SOLANA_FUNDING_DESTINATION",
+        ),
+      );
 const financialApi = new AlphaBasketApiService(
   new PostgresQuoteContextStore(
     sql,
     programId,
     config.api.maximumNavAgeMs,
+    { predictionVenue: config.prediction.venue },
   ),
   new PostgresFinancialRequestStore(sql),
   walletRoutes,

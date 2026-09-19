@@ -25,16 +25,39 @@ const environmentSchema = z.object({
   CAPITAL_SOLANA_CLUSTER: z.enum(["localnet", "devnet", "mainnet-beta"]).default("localnet"),
   CAPITAL_MODE: z.enum(["mock", "prefunded_staging", "live_bridge"]).default("mock"),
   /**
-   * Prediction-market execution through Polymarket.
+   * Which venue executes prediction-market composition items.
    *
-   * Off by default while the MVP runs Solana-only. Everything it needs still
-   * exists: the Polygon signer, the bridge, CTF redemption and the relayer. This
-   * is a switch rather than a deletion because re-adding roughly 1,400 lines and
-   * the 51 files that reference them costs far more than leaving them dark, and
-   * the on-chain `PositionKind::PredictionMarket` variant stays regardless,
-   * since removing a variant from a deployed program is a migration.
+   * - `jupiter_predict`: Solana-native execution through Jupiter's Prediction
+   *   API (Polymarket markets served on Solana, USDC in and out, no Polygon).
+   *   With Phoenix for perps and Jupiter for spot, this makes all three asset
+   *   classes Solana-native.
+   * - `polymarket`: the original Polygon path — CLOB FAK orders, the bridge,
+   *   pUSD and the relayer. Kept compiled and selectable rather than deleted:
+   *   re-adding roughly 1,400 lines across the 51 files that reference them
+   *   costs far more than leaving them dark, and the on-chain
+   *   `PositionKind::PredictionMarket` variant stays regardless, since removing
+   *   a variant from a deployed program is a migration.
+   * - `disabled`: prediction baskets are refused at the quote layer.
+   *
+   * Defaults to `disabled` when unset so a minimal config stays valid;
+   * `POLYMARKET_ENABLED=true` (deprecated) selects `polymarket` for
+   * backwards compatibility.
    */
+  PREDICTION_VENUE: z.enum(["disabled", "jupiter_predict", "polymarket"]).optional(),
+  /** Deprecated: use PREDICTION_VENUE=polymarket instead. */
   POLYMARKET_ENABLED: z.enum(["true", "false"]).default("false"),
+  JUPITER_PREDICT_URL: z.string().url().default("https://api.jup.ag/prediction/v1"),
+  /**
+   * Top-level programs the settlement key may sign in a Predict-built
+   * transaction, beyond compute budget and the associated-token program. The
+   * Prediction API is in beta and does not publish a stable program id, so the
+   * allowlist is explicit configuration: the gateway refuses to start the
+   * predict service without it.
+   */
+  JUPITER_PREDICT_PROGRAM_IDS: commaSeparated,
+  /** The API rejects orders below $5; six-decimal units. */
+  JUPITER_PREDICT_MINIMUM_ORDER_UNITS: decimalUnits.default("5000000"),
+  EXECUTION_GATEWAY_MAXIMUM_PREDICT_ORDER_UNITS: decimalUnits.default("10000000"),
   MANAGEMENT_FEE_KEEPER_INTERVAL_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(3_600_000),
   RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(10_000).max(86_400_000).default(60_000),
   OUTBOX_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
@@ -137,6 +160,14 @@ export type BackendConfig = Readonly<{
     alertTicketWebhookUrl?: string;
     alertWebhookHmacSecret?: string;
   }>;
+  prediction: Readonly<{
+    venue: "disabled" | "jupiter_predict" | "polymarket";
+  }>;
+  jupiterPredict: Readonly<{
+    url: string;
+    programIds: readonly string[];
+    minimumOrderUnits: bigint;
+  }>;
   deployment: Readonly<{
     mode: "local" | "hybrid_devnet" | "production_canary" | "production";
     accountingSolanaCluster: "localnet" | "devnet" | "mainnet-beta";
@@ -177,6 +208,7 @@ export type BackendConfig = Readonly<{
     maximumTransferUnits: bigint;
     maximumSplitUnits: bigint;
     maximumJupiterSwapUnits: bigint;
+    maximumPredictOrderUnits: bigint;
     maximumPolygonFeeWei: bigint;
     maximumSolanaFeeLamports: bigint;
   }>;
@@ -243,6 +275,26 @@ export function loadMigrationConfig(source: NodeJS.ProcessEnv = process.env): Re
 
 export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): BackendConfig {
   const value = environmentSchema.parse(source);
+  // Explicit venue wins; the deprecated boolean maps onto it; otherwise dark.
+  const predictionVenue = value.PREDICTION_VENUE ??
+    (value.POLYMARKET_ENABLED === "true" ? "polymarket" : "disabled");
+  if (value.PREDICTION_VENUE !== undefined && value.PREDICTION_VENUE !== "polymarket" && value.POLYMARKET_ENABLED === "true") {
+    throw new Error("POLYMARKET_ENABLED=true conflicts with PREDICTION_VENUE; drop the deprecated flag");
+  }
+  if (predictionVenue === "jupiter_predict") {
+    if (value.SOLANA_SETTLEMENT_RECEIVER === undefined) {
+      throw new Error("SOLANA_SETTLEMENT_RECEIVER is required when PREDICTION_VENUE=jupiter_predict");
+    }
+    if (value.CAPITAL_MODE !== "mock" && value.CAPITAL_SOLANA_CLUSTER !== "mainnet-beta") {
+      throw new Error("live Jupiter Predict execution requires capital on Solana mainnet-beta");
+    }
+    if (!value.JUPITER_PREDICT_URL.startsWith("https://")) {
+      throw new Error("JUPITER_PREDICT_URL must use HTTPS");
+    }
+  }
+  if (value.JUPITER_PREDICT_MINIMUM_ORDER_UNITS <= 0n) {
+    throw new Error("JUPITER_PREDICT_MINIMUM_ORDER_UNITS must be positive");
+  }
   if (value.POLYGON_CHAIN_ID !== 137) throw new Error("POLYGON_CHAIN_ID must be 137 for Polymarket production execution");
   if (
     value.DEPLOYMENT_MODE === "hybrid_devnet" && (
@@ -320,6 +372,7 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
     value.EXECUTION_GATEWAY_MAXIMUM_TRANSFER_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_SPLIT_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_JUPITER_SWAP_UNITS,
+    value.EXECUTION_GATEWAY_MAXIMUM_PREDICT_ORDER_UNITS,
     value.EXECUTION_GATEWAY_MAXIMUM_POLYGON_FEE_WEI,
     value.EXECUTION_GATEWAY_MAXIMUM_SOLANA_FEE_LAMPORTS,
   ];
@@ -343,6 +396,12 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
 
   return Object.freeze({
     environment: value.NODE_ENV,
+    prediction: Object.freeze({ venue: predictionVenue }),
+    jupiterPredict: Object.freeze({
+      url: value.JUPITER_PREDICT_URL,
+      programIds: value.JUPITER_PREDICT_PROGRAM_IDS,
+      minimumOrderUnits: value.JUPITER_PREDICT_MINIMUM_ORDER_UNITS,
+    }),
     api: Object.freeze({
       host: value.API_HOST,
       port: value.API_PORT,
@@ -403,6 +462,7 @@ export function loadBackendConfig(source: NodeJS.ProcessEnv = process.env): Back
       maximumTransferUnits: value.EXECUTION_GATEWAY_MAXIMUM_TRANSFER_UNITS,
       maximumSplitUnits: value.EXECUTION_GATEWAY_MAXIMUM_SPLIT_UNITS,
       maximumJupiterSwapUnits: value.EXECUTION_GATEWAY_MAXIMUM_JUPITER_SWAP_UNITS,
+      maximumPredictOrderUnits: value.EXECUTION_GATEWAY_MAXIMUM_PREDICT_ORDER_UNITS,
       maximumPolygonFeeWei: value.EXECUTION_GATEWAY_MAXIMUM_POLYGON_FEE_WEI,
       maximumSolanaFeeLamports: value.EXECUTION_GATEWAY_MAXIMUM_SOLANA_FEE_LAMPORTS,
     }),

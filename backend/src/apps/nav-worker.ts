@@ -20,7 +20,13 @@ import { PgSqlClient } from "../persistence/index.js";
 import {
   ClobRestMarketData,
   JsonHttpClient,
+  type ClobMarketDataPort,
 } from "../polymarket/index.js";
+import {
+  JupiterPredictMarketData,
+  JupiterPredictRest,
+  PostgresPredictMarketLinkStore,
+} from "../predict/index.js";
 import {
   NavSnapshotScheduler,
   PeriodicWorker,
@@ -36,15 +42,45 @@ const pool = new Pool({
 });
 const sql = new PgSqlClient(pool);
 const holdings = new PostgresBasketAttributedHoldings(sql);
-const clob = new ClobRestMarketData(
-  new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
-  { baseUrl: config.polymarket.clobUrl },
-);
+const predictionVenue = config.prediction.venue;
+let predictionMarks: ClobMarketDataPort;
+if (predictionVenue === "jupiter_predict") {
+  predictionMarks = new JupiterPredictMarketData(
+    new JupiterPredictRest(
+      new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
+      {
+        baseUrl: config.jupiterPredict.url,
+        apiKey: (() => {
+          if (config.jupiter.apiKey === undefined) {
+            throw new Error("JUPITER_API_KEY is required to price Jupiter Predict holdings");
+          }
+          return config.jupiter.apiKey;
+        })(),
+      },
+    ),
+    new PostgresPredictMarketLinkStore(sql),
+    { minimumOrderUnits: config.jupiterPredict.minimumOrderUnits },
+  );
+} else if (predictionVenue === "polymarket") {
+  predictionMarks = new ClobRestMarketData(
+    new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
+    { baseUrl: config.polymarket.clobUrl },
+  );
+} else {
+  predictionMarks = {
+    getOrderBook: () => {
+      throw new Error("prediction marks are unavailable: PREDICTION_VENUE is disabled");
+    },
+    getMidpoint: () => {
+      throw new Error("prediction marks are unavailable: PREDICTION_VENUE is disabled");
+    },
+  };
+}
 const markWriter = new PostgresBasketHoldingMarkWriter(sql);
 const marks = config.jupiter.enabled
   ? new HybridBasketMarkRefreshService(
       holdings,
-      clob,
+      predictionMarks,
       new JupiterPriceV3Client(
         new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 10_000 }),
         config.jupiter.apiKey as string,
@@ -56,7 +92,7 @@ const marks = config.jupiter.enabled
     )
   : new ClobBasketMarkRefreshService(
       holdings,
-      clob,
+      predictionMarks,
       markWriter,
       { maxBookAgeMs: config.readPlane.navMaxMarkAgeMs },
     );
@@ -98,6 +134,7 @@ process.stdout.write(`${JSON.stringify({
   intervalMs: config.readPlane.navSnapshotIntervalMs,
   maxMarkAgeMs: config.readPlane.navMaxMarkAgeMs.toString(10),
   jupiterSpotEnabled: config.jupiter.enabled,
+  predictionVenue,
 })}\n`);
 try {
   await worker.run(controller.signal);

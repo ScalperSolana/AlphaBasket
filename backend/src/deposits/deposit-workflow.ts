@@ -55,11 +55,21 @@ export interface DepositWorkflowRequest {
   readonly spotFundingDestination?: string;
   readonly fundingTransactionSignature: string;
   readonly maxSlippageBps: number;
+  /**
+   * Which venue executes the prediction targets. `jupiter_predict` is
+   * Solana-native: prediction funding lands on the settlement wallet (the
+   * prepared funding address), buys run through Jupiter Predict in USDC, and
+   * the Polygon bridge/credit machinery is never touched.
+   */
+  readonly predictionVenue?: "polymarket" | "jupiter_predict";
   readonly targets: readonly (
     WeightedExecutionTarget & ({
       readonly kind?: "prediction_market";
       readonly worstBuyPriceUnits: bigint;
       readonly negativeRisk: boolean;
+      readonly marketId?: string;
+      readonly conditionId?: string | null;
+      readonly outcomeIndex?: number;
     } | {
       readonly kind: "spot";
       readonly tokenMint: string;
@@ -108,6 +118,11 @@ export class DepositWorkflow {
     readonly workflowId: string;
     readonly intent: SignedDepositIntent;
     readonly polymarketWallet: string;
+    /**
+     * Solana-native venues fund prediction execution at this address directly;
+     * when set, no bridge deposit address is created.
+     */
+    readonly venueFundingAddress?: string;
     readonly now: Date;
   }): Promise<PreparedDeposit> {
     const quote = request.intent.quote;
@@ -132,8 +147,12 @@ export class DepositWorkflow {
     let operation = loaded.operation;
     let bridgeAddress: string;
     if (operation.state === "created") {
-      const address = await this.bridge.createDepositAddress(request.polymarketWallet);
-      bridgeAddress = address.svm;
+      if (request.venueFundingAddress !== undefined) {
+        bridgeAddress = request.venueFundingAddress;
+      } else {
+        const address = await this.bridge.createDepositAddress(request.polymarketWallet);
+        bridgeAddress = address.svm;
+      }
       operation = await this.operations.transition(operation.id, operation.version, "intent_verified", {
         bridgeAddress,
       }, request.now);
@@ -167,12 +186,16 @@ export class DepositWorkflow {
   }
 
   private async executeLocked(request: DepositWorkflowRequest, signal: AbortSignal): Promise<DepositWorkflowResult> {
+    const venue = request.predictionVenue ?? "polymarket";
     const prepared = await this.prepare({
       operationId: request.operationId,
       requestKey: request.requestKey,
       workflowId: request.workflowId,
       intent: request.intent,
       polymarketWallet: request.polymarketWallet,
+      ...(venue === "jupiter_predict"
+        ? { venueFundingAddress: request.preparedBridgeAddress }
+        : {}),
       now: request.now,
     });
     if (prepared.bridgeAddress !== request.preparedBridgeAddress) {
@@ -188,34 +211,32 @@ export class DepositWorkflow {
       0n,
     );
     const spotFunding = quote.quotedNetValue - predictionFunding;
-    if (predictionFunding > 0n) {
+    if (spotFunding > 0n && request.spotFundingDestination === undefined) {
+      throw new Error("spot or mixed deposit is missing its mainnet funding destination");
+    }
+    // The verifier checks a destination's total finalized delta, so legs that
+    // share a destination (a Solana-native venue funds prediction and spot from
+    // the same settlement wallet) must be verified once with their sum.
+    const expectedByDestination = new Map<string, bigint>();
+    const expect = (destination: string, amountUnits: bigint): void => {
+      if (amountUnits === 0n) return;
+      expectedByDestination.set(
+        destination,
+        (expectedByDestination.get(destination) ?? 0n) + amountUnits,
+      );
+    };
+    expect(prepared.bridgeAddress, predictionFunding);
+    if (spotFunding > 0n) expect(request.spotFundingDestination as string, spotFunding);
+    expect(request.protocolFeeDestination, quote.protocolFee);
+    for (const [destination, amountUnits] of expectedByDestination) {
       await this.funding.verifyFinalizedTransfer({
         signature: request.fundingTransactionSignature,
         expectedUser: quote.user.toBase58(),
-        expectedBridgeAddress: prepared.bridgeAddress,
+        expectedBridgeAddress: destination,
         expectedMint: request.solanaUsdcMint,
-        expectedAmountUnits: predictionFunding,
+        expectedAmountUnits: amountUnits,
       });
     }
-    if (spotFunding > 0n) {
-      if (request.spotFundingDestination === undefined) {
-        throw new Error("spot or mixed deposit is missing its mainnet funding destination");
-      }
-      await this.funding.verifyFinalizedTransfer({
-        signature: request.fundingTransactionSignature,
-        expectedUser: quote.user.toBase58(),
-        expectedBridgeAddress: request.spotFundingDestination,
-        expectedMint: request.solanaUsdcMint,
-        expectedAmountUnits: spotFunding,
-      });
-    }
-    await this.funding.verifyFinalizedTransfer({
-      signature: request.fundingTransactionSignature,
-      expectedUser: quote.user.toBase58(),
-      expectedBridgeAddress: request.protocolFeeDestination,
-      expectedMint: request.solanaUsdcMint,
-      expectedAmountUnits: quote.protocolFee,
-    });
     if (operation.state === "intent_verified") {
       operation = await this.operations.transition(operation.id, operation.version, "funding_verified", {
         ...operation.checkpoint,
@@ -234,6 +255,16 @@ export class DepositWorkflow {
       credited = 0n;
       bridgeDestinationTxHash = "none";
       bridgeObservedAtMs = BigInt(request.now.getTime());
+    } else if (venue === "jupiter_predict") {
+      // The verified funding transfer above IS the delivery: USDC is already in
+      // the settlement wallet that executes Predict orders. Nothing bridges and
+      // nothing converts, so the credited amount is the funded amount.
+      credited = predictionFunding;
+      bridgeDestinationTxHash = request.fundingTransactionSignature;
+      const storedObservedAtMs = operation.checkpoint.bridgeObservedAtMs;
+      bridgeObservedAtMs = typeof storedObservedAtMs === "string"
+        ? BigInt(storedObservedAtMs)
+        : BigInt(request.now.getTime());
     } else if (request.capitalMode === "prefunded_staging") {
       credited = predictionFunding;
       bridgeDestinationTxHash = `prefunded:${request.operationId}`;
@@ -306,6 +337,9 @@ export class DepositWorkflow {
         negativeRisk: source.negativeRisk,
         amountUnits: target.amountUnits,
         worstPriceUnits: source.worstBuyPriceUnits,
+        ...(source.marketId === undefined ? {} : { marketId: source.marketId }),
+        ...(source.conditionId === undefined ? {} : { conditionId: source.conditionId }),
+        ...(source.outcomeIndex === undefined ? {} : { outcomeIndex: source.outcomeIndex }),
       });
       orders.push(order);
       await this.faults.after("deposit.fak_order_executed", {
@@ -314,8 +348,11 @@ export class DepositWorkflow {
       });
     }
     const spent = orders.reduce((sum, order) => sum + order.filledInputUnits, 0n);
-    if (spent > credited) throw new Error("FAK buys spent more pUSD than the bridge credited");
-    const idlePusdUnits = credited - spent;
+    if (spent > credited) throw new Error("FAK buys spent more venue cash than the deposit credited");
+    // Jupiter Predict trades in USDC that never leaves Solana, so its unspent
+    // remainder is idle USDC; only the Polygon venue accrues idle pUSD.
+    const idlePusdUnits = venue === "jupiter_predict" ? 0n : credited - spent;
+    const idlePredictionUsdc = venue === "jupiter_predict" ? credited - spent : 0n;
     const spotTargets = requestedAllocation.targets.flatMap((target, index) => {
       const source = request.targets[index];
       return source?.kind === "spot"
@@ -360,7 +397,7 @@ export class DepositWorkflow {
     if (spentUsdc > spotFunding) {
       throw new Error("Jupiter buys spent more USDC than the deposit funded");
     }
-    const idleUsdcUnits = spotFunding - spentUsdc;
+    const idleUsdcUnits = spotFunding - spentUsdc + idlePredictionUsdc;
     if (operation.state === "bridge_completed") {
       operation = await this.operations.transition(operation.id, operation.version, "trading_completed", {
         ...operation.checkpoint,

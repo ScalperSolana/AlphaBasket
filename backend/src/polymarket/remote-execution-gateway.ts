@@ -162,6 +162,7 @@ export class HttpSolanaAtomicSplit
     readonly sourceBridgeTransaction: string | null;
     readonly sourceBridgeAmountUnits?: bigint;
     readonly sourceJupiterTransactions?: readonly string[];
+    readonly sourcePredictTransactions?: readonly string[];
     readonly idleUsdcAmountUnits?: bigint;
     readonly mint: string;
     readonly userDestination: string;
@@ -179,6 +180,7 @@ export class HttpSolanaAtomicSplit
     if (amounts.some((amount) => amount < 0n) || amounts.every((amount) => amount === 0n)) {
       throw new RangeError("atomic split must distribute a positive non-negative amount");
     }
+    const predictSources = [...(request.sourcePredictTransactions ?? [])].sort();
     const requestHash = hash([
       "ALPHABASKET_REMOTE_SOLANA_SPLIT_V1",
       this.options.deploymentMode,
@@ -192,6 +194,9 @@ export class HttpSolanaAtomicSplit
       request.creatorDestination,
       request.protocolDestination,
       ...amounts.map((amount) => amount.toString(10)),
+      // Appended only when present so pre-Predict hashes are unchanged; must
+      // mirror the gateway's canonicalHash exactly.
+      ...(predictSources.length === 0 ? [] : [predictSources]),
     ]);
     const result = await this.http.post(
       `${this.baseUrl}/v1/solana/atomic-split`,
