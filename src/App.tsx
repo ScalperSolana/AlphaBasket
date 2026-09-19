@@ -1,143 +1,91 @@
-import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
+import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Routes, Route, useLocation } from "react-router-dom";
-import { NetworkProvider } from "@/contexts/NetworkContext";
-import { WalletProvider } from "@/contexts/WalletContext";
-import { BasketProvider } from "@/contexts/BasketContext";
+import { useMemo } from "react";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { CreatePanel } from "@/components/index/CreatePanel";
+import { IndexPanel } from "@/components/index/IndexPanel";
 import { Header } from "@/components/layout/Header";
-import DiscoverPage from "./pages/index-product/DiscoverPage";
-import CreateIndexPage from "./pages/index-product/CreateIndexPage";
-import IndexPage from "./pages/index-product/IndexPage";
-import PortfolioPage from "./pages/index-product/PortfolioPage";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ENV } from "./env";
+import HomePage from "./pages/HomePage";
 import NotFound from "./pages/NotFound";
 
-// The prediction-market contest surface. Left on disk and off the router while
-// the index product is the live experience: the pages still build, and nothing
-// has been thrown away, but none of it is reachable.
-//   pages/Index, ExplorePage, ExplorerHoldPage, BuilderPage, BasketPage,
-//   MyBasketsPage, LandingPage, DocsPage
-import { ConnectionProvider, WalletProvider as SolanaWalletProvider } from "@solana/wallet-adapter-react";
-import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import { ENV } from "./env";
-import { ReactNode, useEffect, useMemo } from "react";
-import { Send } from "lucide-react";
+// The prediction-market contest surface (pages/Index, ExplorePage,
+// ExplorerHoldPage, BuilderPage, BasketPage, MyBasketsPage, LandingPage,
+// DocsPage) stays on disk and off the router. Nothing there is reachable.
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 15_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
+/**
+ * One page. Everything opens in place:
+ *
+ *   /                 indexes and, once a wallet is connected, your positions
+ *   /index/:address   an index's composition, valuation and deposit/withdraw,
+ *                     as a panel over the list
+ *   /create           the index builder, as a panel over the list
+ *
+ * The two panel routes are nested so the list stays mounted underneath and a
+ * deep link lands with the panel already open.
+ */
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<DiscoverPage />} />
-      <Route path="/create" element={<CreateIndexPage />} />
-      <Route path="/index/:address" element={<IndexPage />} />
-      <Route path="/portfolio" element={<PortfolioPage />} />
+      <Route path="/" element={<HomePage />}>
+        <Route path="index/:address" element={<IndexPanel />} />
+        <Route path="create" element={<CreatePanel />} />
+      </Route>
 
-      {/* Old contest paths, so a stale link lands somewhere sensible. */}
+      {/* Old paths, so a stale link lands somewhere sensible. */}
       <Route path="/explorer" element={<Navigate to="/" replace />} />
       <Route path="/builder" element={<Navigate to="/create" replace />} />
-      <Route path="/me" element={<Navigate to="/portfolio" replace />} />
+      <Route path="/me" element={<Navigate to="/" replace />} />
+      <Route path="/portfolio" element={<Navigate to="/" replace />} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }
 
-function ReferralCapture() {
-  const location = useLocation();
-
-  useEffect(() => {
-    const ref = new URLSearchParams(location.search).get("ref");
-    if (ref) {
-      window.localStorage.setItem("polybaskets.pendingReferrer", ref);
-    }
-  }, [location.search]);
-
-  return null;
-}
-
-function TelegramUpdatesCta() {
-  return (
-    <a
-      href="https://t.me/polybaskets"
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label="Join PolyBaskets on Telegram"
-      className="fixed bottom-20 right-4 md:bottom-4 z-40 inline-flex items-center gap-2 rounded-full border border-primary/40 bg-background/90 px-4 py-2 text-sm font-medium text-primary shadow-[0_0_24px_rgba(132,255,0,0.12)] backdrop-blur-md transition-all duration-200 hover:border-primary/70 hover:bg-background hover:text-primary hover:shadow-[0_0_28px_rgba(132,255,0,0.2)]"
-    >
-      <Send className="h-4 w-4" />
-      <span>Get Updates</span>
-    </a>
-  );
-}
-
-function RoutedLayout() {
-  const location = useLocation();
-
-  if (location.pathname === "/") {
-    return (
-      <>
-        <ReferralCapture />
-        <AppRoutes />
-        <TelegramUpdatesCta />
-      </>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-background bg-pattern scanlines relative">
-      <div className="fixed inset-0 pointer-events-none -z-10" />
-      <Header />
-      <ReferralCapture />
-      <AppRoutes />
-      <TelegramUpdatesCta />
-    </div>
-  );
-}
-
-// Solana wallet + connection providers
-function SolanaProviders({ children }: { children: ReactNode }) {
-  // Phantom, Solflare, Backpack, MetaMask (Solana) and other Wallet Standard
-  // wallets register themselves and are auto-detected — so the modal lists only
-  // wallets the user actually has installed. Passing explicit legacy adapters
-  // made non-installed wallets appear and throw "compatible wallet not found".
+function SolanaProviders({ children }: { children: React.ReactNode }) {
+  // Wallet Standard wallets (Phantom, Solflare, Backpack, …) register
+  // themselves, so the picker lists only wallets the user actually has.
+  // Passing explicit legacy adapters made absent wallets appear and throw.
   const wallets = useMemo(() => [], []);
 
   return (
     <ConnectionProvider endpoint={ENV.SOLANA_RPC}>
-      <SolanaWalletProvider wallets={wallets} autoConnect>
+      <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
-      </SolanaWalletProvider>
+      </WalletProvider>
     </ConnectionProvider>
   );
 }
 
-// Inner app component
-function AppInner() {
+export default function App() {
   return (
-    <SolanaProviders>
-      <WalletProvider>
-        <BasketProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Sonner />
-            <BrowserRouter>
-              <RoutedLayout />
-            </BrowserRouter>
-          </TooltipProvider>
-        </BasketProvider>
-      </WalletProvider>
-    </SolanaProviders>
+    <QueryClientProvider client={queryClient}>
+      <SolanaProviders>
+        <TooltipProvider delayDuration={200}>
+          <BrowserRouter>
+            <div className="flex min-h-screen flex-col">
+              <Header />
+              <AppRoutes />
+            </div>
+          </BrowserRouter>
+          <Toaster />
+        </TooltipProvider>
+      </SolanaProviders>
+    </QueryClientProvider>
   );
 }
-
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <NetworkProvider>
-      <AppInner />
-    </NetworkProvider>
-  </QueryClientProvider>
-);
-
-export default App;

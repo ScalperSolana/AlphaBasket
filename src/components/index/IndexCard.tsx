@@ -1,87 +1,69 @@
-import { Link } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import {
-  ASSET_KIND_LABEL,
-  formatBps,
-  formatUsd,
-  shortId,
-  type IndexSummary,
-} from "@/types/index-basket";
+import { KindBadge, StatusBadge } from "@/components/index/badges";
+import { cn } from "@/lib/utils";
+import { formatBps, formatShares, formatUsd, shortId, type IndexSummary } from "@/types/index-basket";
 
-const kindTone: Record<string, string> = {
-  perp: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-  spot: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  prediction_market: "bg-violet-500/15 text-violet-400 border-violet-500/30",
-};
+export function IndexCard({ index, order = 0 }: { index: IndexSummary; order?: number }) {
+  const { address } = useParams<{ address: string }>();
+  const selected = address === index.address;
 
-const statusTone = (status: string): string =>
-  status === "active"
-    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-    : "bg-muted text-muted-foreground";
-
-export function IndexCard({ index }: { index: IndexSummary }) {
   return (
-    <Link to={`/index/${index.address}`} className="block group">
-      <Card className="h-full transition-colors group-hover:border-primary/50">
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="font-mono text-sm truncate">{shortId(index.basketId)}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {index.itemCount} legs · v{index.compositionVersion}
-              </p>
-            </div>
-            <Badge variant="outline" className={statusTone(index.status)}>
-              {index.status}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            {index.assetKinds.map((kind) => (
-              <Badge key={kind} variant="outline" className={kindTone[kind]}>
-                {ASSET_KIND_LABEL[kind]}
-              </Badge>
-            ))}
-            {index.isPerpetual && (
-              <Badge variant="outline" className="text-muted-foreground">
-                Perpetual
-              </Badge>
-            )}
-          </div>
+    <Link
+      to={`/index/${index.address}`}
+      aria-current={selected ? "true" : undefined}
+      style={{ animationDelay: `${Math.min(order, 8) * 40}ms` }}
+      className={cn(
+        "surface surface-interactive group block animate-rise-in p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        selected && "border-primary/60 shadow-glow-ring",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-wrap gap-1.5">
+          {index.assetKinds.map((kind) => (
+            <KindBadge key={kind} kind={kind} />
+          ))}
+        </div>
+        <StatusBadge status={index.status} />
+      </div>
 
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <div>
-              <dt className="text-xs text-muted-foreground">Share price</dt>
-              <dd className="font-medium tabular-nums">
-                {formatUsd(index.sharePriceUnits)}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">NAV</dt>
-              <dd className="font-medium tabular-nums">
-                {formatUsd(index.grossNavUnits)}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Perf. fee</dt>
-              <dd className="font-medium tabular-nums">
-                {formatBps(index.performanceFeeBps)}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Shares out</dt>
-              <dd className="font-medium tabular-nums">
-                {Number(index.totalSharesOutstanding) === 0
-                  ? "—"
-                  : Number(index.totalSharesOutstanding).toLocaleString()}
-              </dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
+      <div className="mt-4">
+        <p className="font-mono text-base font-semibold tracking-tight transition-colors duration-150 group-hover:text-primary">
+          {shortId(index.basketId)}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {index.itemCount} legs · v{index.compositionVersion} · {formatBps(index.performanceFeeBps)} fee
+        </p>
+      </div>
+
+      <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3">
+        <div>
+          <dt className="stat-label">Share price</dt>
+          <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+            {index.sharePriceUnits === null ? (
+              <span className="text-muted-foreground">Unpriced</span>
+            ) : (
+              formatUsd(index.sharePriceUnits)
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="stat-label">NAV</dt>
+          <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+            {index.grossNavUnits === null ? <span className="text-muted-foreground">—</span> : formatUsd(index.grossNavUnits)}
+          </dd>
+        </div>
+        <div>
+          <dt className="stat-label">Shares out</dt>
+          <dd className="mt-0.5 text-sm tabular-nums">
+            {index.totalSharesOutstanding === "0" ? "—" : formatShares(index.totalSharesOutstanding)}
+          </dd>
+        </div>
+        <div>
+          <dt className="stat-label">Structure</dt>
+          <dd className="mt-0.5 text-sm">{index.isPerpetual ? "Open-ended" : "Resolving"}</dd>
+        </div>
+      </dl>
     </Link>
   );
 }

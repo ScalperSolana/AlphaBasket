@@ -1,3 +1,4 @@
+import '@/styles/legacy-effects.css';
 import { useMemo, useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useBasket } from '@/contexts/BasketContext';

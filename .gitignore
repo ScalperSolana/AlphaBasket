@@ -71,4 +71,8 @@ convert-settler-address.js
 
 # migration
 migration
-scripts
+scripts/*
+!scripts/ui-e2e/
+
+# UI end-to-end screenshots
+scripts/ui-e2e/shots/
