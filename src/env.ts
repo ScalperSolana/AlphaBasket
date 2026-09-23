@@ -27,6 +27,14 @@ const parseNumberEnv = (value: unknown, fallback: number): number => {
 
 const normalizeUrl = (value: string): string => value.replace(/\/+$/, '');
 
+/** Turns a same-origin RPC path into the absolute URL `Connection` requires. */
+const resolveRpcUrl = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/')) return trimmed;
+  if (typeof window === 'undefined') return trimmed;
+  return `${window.location.origin}${trimmed}`;
+};
+
 // USDC SPL mint on Solana devnet.
 const DEVNET_USDC_MINT = 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr';
 
@@ -37,7 +45,13 @@ export const ENV = {
   // Accounting runs on the cluster below (devnet during internal testing).
   // Capital moves on Solana mainnet: deposits are one USDC transaction on the
   // capital RPC, which is why it is configured separately from SOLANA_RPC.
-  CAPITAL_RPC: import.meta.env.VITE_CAPITAL_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  // A same-origin path (e.g. "/rpc") is supported and preferred: it keeps a
+  // keyed provider URL on the server instead of inlining the credential into
+  // the bundle. Resolved against the page origin because `Connection` requires
+  // an absolute URL.
+  CAPITAL_RPC: resolveRpcUrl(
+    import.meta.env.VITE_CAPITAL_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  ),
   CAPITAL_USDC_MINT:
     import.meta.env.VITE_CAPITAL_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   EXPLORER_URL: normalizeUrl(import.meta.env.VITE_EXPLORER_URL || 'https://solscan.io'),

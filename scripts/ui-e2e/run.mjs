@@ -107,10 +107,33 @@ const walletInit = ({ address, publicKeyBytes, autoConnect }) => {
   window.dispatchEvent(new CustomEvent("wallet-standard:register-wallet", { detail: register }));
 };
 
-async function newPage(browser, { connected, viewport = { width: 1440, height: 900 } }) {
+/** Six-decimal USDC the stubbed balance probe reports for the test wallet. */
+const STUB_BALANCE_UNITS = "500000000";
+
+async function newPage(browser, { connected, viewport = { width: 1440, height: 900 }, stubBalance = false } = {}) {
   const context = await browser.newContext({ viewport, permissions: ["clipboard-read", "clipboard-write"] });
   const errors = [];
   await context.exposeFunction("__testSign", (b64) => Buffer.from(sign(Buffer.from(b64, "base64"))).toString("base64"));
+  if (stubBalance) {
+    // The deterministic test wallet holds no real mainnet USDC, and the UI now
+    // correctly refuses a deposit above your balance. Stub just that one RPC
+    // method so the signing path stays reachable; every other /rpc call still
+    // goes to the real proxied endpoint.
+    await context.route("**/rpc", async (route) => {
+      let body;
+      try { body = JSON.parse(route.request().postData() ?? "{}"); } catch { body = {}; }
+      if (body.method !== "getTokenAccountBalance") return route.continue();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id ?? 1,
+          result: { context: { slot: 1 }, value: { amount: STUB_BALANCE_UNITS, decimals: 6, uiAmount: 500, uiAmountString: "500" } },
+        }),
+      });
+    });
+  }
   if (connected) {
     await context.addInitScript(walletInit, { address, publicKeyBytes: Array.from(keypair.publicKey.toBytes()), autoConnect: true });
   }
@@ -123,9 +146,10 @@ async function newPage(browser, { connected, viewport = { width: 1440, height: 9
 }
 
 const shot = (page, name) => page.screenshot({ path: `${here}shots/${name}.png` });
-// Network-level noise is expected against a local backend: the public mainnet
-// RPC answers 403 to the balance probe, and the backend's 500 path sends no
-// CORS headers so the browser logs a CORS block. Anything else is a bug.
+// Network-level noise is expected against a local backend: its 500 path sends
+// no CORS headers, so a refused intent shows up as a browser CORS block.
+// Anything else is a bug. (The capital RPC no longer contributes noise: it is
+// proxied at /rpc, same-origin, with the provider key held server-side.)
 const noise = (e) => /Failed to load resource|CORS policy|net::ERR_FAILED|Failed to fetch/.test(e);
 const GRID = 'section[aria-labelledby="indexes-heading"] a[href^="/index/"]';
 const gridCount = (page, n) => page.waitForFunction(({ sel, n }) => document.querySelectorAll(sel).length === n, { sel: GRID, n });
@@ -136,7 +160,7 @@ const browser = await chromium.launch();
 try {
   // ------------------------------------------------------------- connected
   freshNav();
-  const { page, errors } = await newPage(browser, { connected: true });
+  const { page, errors } = await newPage(browser, { connected: true, stubBalance: true });
   await page.goto(APP);
   await page.waitForSelector(GRID);
   check((await page.locator(GRID).count()) === 4, "home lists 4 index cards");
@@ -185,6 +209,15 @@ try {
   // Deposit: quote → breakdown → sign → submit.
   await dialog.getByLabel("Amount").fill("100");
   await dialog.getByText("You receive").waitFor({ timeout: 15000 });
+  // The balance probe resolves through the proxied capital RPC; on the public
+  // endpoint it used to fail and render "—".
+  const balanceLabel = (await dialog.getByText(/^Balance:/).textContent()) ?? "";
+  check(/Balance: [\d,]+\.\d\d USDC/.test(balanceLabel), `USDC balance resolves from the capital RPC (${balanceLabel.trim()})`);
+  // A resolved balance means the UI can refuse a deposit larger than it.
+  await dialog.getByLabel("Amount").fill("5000");
+  await dialog.getByText("More than your USDC balance.").waitFor();
+  check(await dialog.getByRole("button", { name: /Deposit \$5,000/ }).isDisabled(), "deposit above the USDC balance is blocked inline");
+  await dialog.getByLabel("Amount").fill("100");
   check(await dialog.getByText("−$0.50").isVisible(), "deposit quote shows the 0.5% fee");
   check(await dialog.getByText("$99.50").isVisible(), "deposit quote shows net invested");
   const depositButton = dialog.getByRole("button", { name: "Deposit $100.00" });
