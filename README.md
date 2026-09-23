@@ -23,7 +23,7 @@ Examples include:
 
 AlphaBasket is designed to support multiple onchain asset classes through a modular execution architecture.
 
-Current & Planned Integrations:
+Current Integrations:
 
 - Tokenized Stocks
 - Crypto Assets
@@ -53,9 +53,9 @@ Execution adapters can plug into different liquidity venues while sharing the sa
 
 Current adapters:
 
+- Backpack Securities
 - Polymarket
 - Jupiter
-- XStocks
 - Phoenix
 
 ## Vision
@@ -89,10 +89,6 @@ Current fee model:
 
 | Fee | Recipient | Rule |
 | --- | --- | --- |
-| Deposit | Protocol | 0.5% |
-| Management/AUM | Protocol | 0.35% per 30 days, accrued proportionally to exact elapsed seconds through share dilution |
-| Early withdrawal | Protocol | 2% before 60 days |
-| Mature withdrawal | Protocol | 1% at or after 60 days |
 | Performance | Creator | 0–20%, default 10%, charged only on redeemed-share profit |
 
 Management fees do not sell Basket positions. The program mints protocol
