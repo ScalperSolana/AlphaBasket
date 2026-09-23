@@ -31,7 +31,18 @@ import {
   PostgresFakExecutionJournal,
   PostgresFinancialExecutionContext,
   PostgresExecutionWorkQueue,
+  type FakExecutionPort,
+  type PolymarketBridgePort,
+  type PolymarketCreditVerifierPort,
+  type PolymarketPusdTransferPort,
 } from "../execution/index.js";
+import {
+  HttpJupiterPredictExecution,
+  JupiterPredictMarketData,
+  JupiterPredictMarketResolver,
+  JupiterPredictRest,
+  PostgresPredictMarketLinkStore,
+} from "../predict/index.js";
 import {
   PostgresCanaryUsageStore,
   ProductionCanaryGuard,
@@ -45,6 +56,7 @@ import {
   HttpSolanaAtomicSplit,
   JsonHttpClient,
   PolymarketBridgeRest,
+  type ClobMarketDataPort,
 } from "../polymarket/index.js";
 import {
   PolygonPusdBalance,
@@ -86,19 +98,22 @@ if (!programId.equals(ALPHABASKET_PROGRAM_ID)) {
 const backendPublicKey = new PublicKey(
   required(config.remoteSigner.backendPublicKey, "BACKEND_SIGNER_PUBLIC_KEY"),
 );
-const polygonRpcUrl = required(config.polymarket.polygonRpcUrl, "POLYGON_RPC_URL");
-const pusdTokenAddress = required(
-  config.polymarket.pusdTokenAddress,
-  "POLYMARKET_PUSD_TOKEN_ADDRESS",
-);
+const predictionVenue = config.prediction.venue;
+// The Polygon leg exists only for the Polymarket venue; a Solana-native
+// deployment must be able to start without any Polygon configuration.
+const polygonRpcUrl = predictionVenue === "polymarket"
+  ? required(config.polymarket.polygonRpcUrl, "POLYGON_RPC_URL")
+  : undefined;
+const pusdTokenAddress = predictionVenue === "polymarket"
+  ? required(config.polymarket.pusdTokenAddress, "POLYMARKET_PUSD_TOKEN_ADDRESS")
+  : undefined;
 const solanaSettlementReceiver = required(
   config.polymarket.solanaSettlementReceiver,
   "SOLANA_SETTLEMENT_RECEIVER",
 );
-const polymarketSolanaChainId = required(
-  config.polymarket.solanaChainId,
-  "POLYMARKET_SOLANA_CHAIN_ID",
-);
+const polymarketSolanaChainId = predictionVenue === "polymarket"
+  ? required(config.polymarket.solanaChainId, "POLYMARKET_SOLANA_CHAIN_ID")
+  : undefined;
 const gatewayUrl = required(config.temporal.executionGatewayUrl, "EXECUTION_GATEWAY_URL");
 const gatewayToken = required(config.temporal.executionGatewayToken, "EXECUTION_GATEWAY_TOKEN");
 
@@ -185,20 +200,49 @@ const gatewayOptions = {
   deploymentMode: config.deployment.mode,
   allowInsecureLocalhost: config.environment !== "production",
 } as const;
-const bridge = new PolymarketBridgeRest(http, {
-  baseUrl: config.polymarket.bridgeUrl,
-  ...(config.polymarket.builderCode === undefined
-    ? {}
-    : { builderCode: config.polymarket.builderCode }),
-});
-const fak = new PostgresFakExecutionJournal(
-  sql,
-  new ClobFakRestExecution(
+const venueDisabled = (capability: string): never => {
+  throw new Error(
+    `${capability} is unavailable: PREDICTION_VENUE is "${predictionVenue}"`,
+  );
+};
+const bridge: PolymarketBridgePort = predictionVenue === "polymarket"
+  ? new PolymarketBridgeRest(http, {
+      baseUrl: config.polymarket.bridgeUrl,
+      ...(config.polymarket.builderCode === undefined
+        ? {}
+        : { builderCode: config.polymarket.builderCode }),
+    })
+  : {
+      createDepositAddress: () => venueDisabled("the Polymarket deposit bridge"),
+      createWithdrawalAddress: () => venueDisabled("the Polymarket withdrawal bridge"),
+      getStatus: () => venueDisabled("Polymarket bridge status"),
+    };
+let venueFak: FakExecutionPort;
+if (predictionVenue === "polymarket") {
+  venueFak = new ClobFakRestExecution(
     http,
     new HttpClobOrderSigner(http, gatewayOptions),
     { baseUrl: config.polymarket.clobUrl },
-  ),
-);
+  );
+} else if (predictionVenue === "jupiter_predict") {
+  const predictRest = new JupiterPredictRest(
+    new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 15_000 }),
+    {
+      baseUrl: config.jupiterPredict.url,
+      apiKey: required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+    },
+  );
+  venueFak = new HttpJupiterPredictExecution(
+    // Predict orders wait for Solana finality plus the venue's fill report,
+    // which can exceed the default request budget.
+    new JsonHttpClient({ fetch: globalThis.fetch, timeoutMs: 120_000 }),
+    new JupiterPredictMarketResolver(predictRest, new PostgresPredictMarketLinkStore(sql)),
+    gatewayOptions,
+  );
+} else {
+  venueFak = { executeFak: () => venueDisabled("prediction execution") };
+}
+const fak = new PostgresFakExecutionJournal(sql, venueFak);
 const pricing = new PostgresSettlementPricing(sql);
 const settlement = new AnchorSettlementGateway(program);
 const guard = new ProductionCanaryGuard(
@@ -222,12 +266,16 @@ const coordinator = new WalletExecutionCoordinator(
   config.temporal.walletLeaseMs,
 );
 const operationStore = new PostgresExecutionOperationStore(sql);
-const credit = new PolygonPusdCreditVerifier(
-  http,
-  polygonRpcUrl,
-  pusdTokenAddress,
-);
-const transfer = new HttpPolymarketPusdTransfer(http, gatewayOptions);
+const credit: PolymarketCreditVerifierPort = predictionVenue === "polymarket"
+  ? new PolygonPusdCreditVerifier(
+      http,
+      polygonRpcUrl as string,
+      pusdTokenAddress as string,
+    )
+  : { verifyPusdCredit: () => venueDisabled("Polygon pUSD credit verification") };
+const transfer: PolymarketPusdTransferPort = predictionVenue === "polymarket"
+  ? new HttpPolymarketPusdTransfer(http, gatewayOptions)
+  : { transferPusd: () => venueDisabled("Polygon pUSD transfers") };
 const splitter = new HttpSolanaAtomicSplit(http, gatewayOptions);
 const jupiter = config.jupiter.enabled
   ? new HttpJupiterExecution(http, gatewayOptions)
@@ -260,18 +308,39 @@ const withdrawal = new WithdrawalWorkflow(
   jupiter,
 );
 const queue = new PostgresExecutionWorkQueue(sql);
+let marketData: ClobMarketDataPort;
+if (predictionVenue === "polymarket") {
+  marketData = new ClobRestMarketData(http, { baseUrl: config.polymarket.clobUrl });
+} else if (predictionVenue === "jupiter_predict") {
+  marketData = new JupiterPredictMarketData(
+    new JupiterPredictRest(http, {
+      baseUrl: config.jupiterPredict.url,
+      apiKey: required(config.jupiter.apiKey, "JUPITER_API_KEY"),
+    }),
+    new PostgresPredictMarketLinkStore(sql),
+    { minimumOrderUnits: config.jupiterPredict.minimumOrderUnits },
+  );
+} else {
+  marketData = {
+    getOrderBook: () => venueDisabled("prediction market data"),
+    getMidpoint: () => venueDisabled("prediction market data"),
+  };
+}
 const runner = new FinancialExecutionOperationRunner(
   new PostgresFinancialExecutionContext(sql, programId),
   new PostgresExecutionPortfolioCommit(sql),
-  new ClobRestMarketData(http, { baseUrl: config.polymarket.clobUrl }),
+  marketData,
   deposit,
   withdrawal,
-  new PolygonPusdBalance(http, polygonRpcUrl, pusdTokenAddress),
+  predictionVenue === "polymarket"
+    ? new PolygonPusdBalance(http, polygonRpcUrl as string, pusdTokenAddress as string)
+    : null,
   {
     capitalMode: config.deployment.capitalMode,
     solanaSettlementReceiver,
-    polymarketSolanaChainId,
+    ...(polymarketSolanaChainId === undefined ? {} : { polymarketSolanaChainId }),
     capitalUsdcMint: config.solana.capital.usdcMint,
+    predictionVenue: predictionVenue === "disabled" ? "polymarket" : predictionVenue,
   },
 );
 const activities = new FinancialExecutionActivities(queue, runner);
@@ -319,6 +388,7 @@ process.stdout.write(`${JSON.stringify({
   ownerId,
   taskQueue: config.temporal.taskQueue,
   capitalMode: config.deployment.capitalMode,
+  predictionVenue,
   accountingCluster: config.deployment.accountingSolanaCluster,
   capitalCluster: config.deployment.capitalSolanaCluster,
 })}\n`);

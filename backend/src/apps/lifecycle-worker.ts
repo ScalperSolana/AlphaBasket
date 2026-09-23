@@ -189,7 +189,13 @@ const reconciliation = new ReconciliationService(
     maxPendingOperationAgeMs: config.deployment.reconciliationMaxPendingAgeMs,
   },
 );
-const assetRefresher = config.deployment.capitalMode === "live_bridge"
+// The refresher compares ledger attribution against Polygon pUSD balances and
+// Polymarket data-API positions, which only exist for the Polymarket venue.
+// Venue-aware reconciliation for Jupiter Predict (wallet USDC plus Predict
+// position readback) is tracked as follow-up; until then reconciliation runs
+// from projections alone on that venue.
+const assetRefresher = config.deployment.capitalMode === "live_bridge" &&
+  config.prediction.venue === "polymarket"
   ? new HybridAssetReconciliationRefresher(
       sql,
       reconciliationSource,

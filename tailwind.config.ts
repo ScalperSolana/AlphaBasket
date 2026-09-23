@@ -2,21 +2,21 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: ["class"],
-  content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
   prefix: "",
   theme: {
     container: {
       center: true,
-      padding: "2rem",
+      padding: "1.5rem",
       screens: {
-        "2xl": "1400px",
+        "2xl": "1280px",
       },
     },
     extend: {
       fontFamily: {
-        sans: ['"Manrope"', 'system-ui', '-apple-system', 'sans-serif'],
-        display: ['"Manrope"', 'system-ui', 'sans-serif'],
-        mono: ['"Source Code Pro"', 'monospace'],
+        sans: ['"Manrope"', "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+        display: ['"Manrope"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"JetBrains Mono"', '"SF Mono"', "Menlo", "ui-monospace", "monospace"],
       },
       colors: {
         border: "hsl(var(--border))",
@@ -71,15 +71,24 @@ export default {
           ring: "hsl(var(--sidebar-ring))",
         },
       },
+      // One radius scale, derived from --radius (16px): sm 8, md 12, lg 16,
+      // xl 20, 2xl 24. Cards use 2xl, controls use xl, chips use full.
       borderRadius: {
+        sm: "calc(var(--radius) - 8px)",
+        md: "calc(var(--radius) - 4px)",
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        xl: "calc(var(--radius) + 4px)",
+        "2xl": "calc(var(--radius) + 8px)",
+        "3xl": "calc(var(--radius) + 16px)",
       },
       boxShadow: {
-        'soft': 'var(--shadow-soft)',
-        'card': 'var(--shadow-card)',
-        'elevated': 'var(--shadow-elevated)',
+        soft: "0 1px 2px rgb(0 0 0 / 0.35), 0 8px 24px -12px rgb(0 0 0 / 0.5)",
+        panel: "-24px 0 80px -32px hsl(var(--primary) / 0.22), 0 24px 64px -24px rgb(0 0 0 / 0.7)",
+        // Glows. One hue, three strengths: resting control, hovered control,
+        // hovered or selected card.
+        glow: "0 0 20px -4px hsl(var(--primary) / 0.35)",
+        "glow-lg": "0 0 36px -6px hsl(var(--primary) / 0.5)",
+        "glow-ring": "0 0 0 1px hsl(var(--primary) / 0.45), 0 16px 48px -16px hsl(var(--primary) / 0.4)",
       },
       keyframes: {
         "accordion-down": {
@@ -90,30 +99,30 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
-        "pulse-soft": {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.6" },
+        "fade-in": {
+          from: { opacity: "0" },
+          to: { opacity: "1" },
         },
-        "slide-up": {
-          from: { opacity: "0", transform: "translateY(10px)" },
+        "rise-in": {
+          from: { opacity: "0", transform: "translateY(6px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
-        "pattern-shift": {
-          "0%, 100%": { backgroundPosition: "0% 0%, 0% 0%, 0% 0%" },
-          "50%": { backgroundPosition: "10% 5%, -5% 10%, 5% -5%" },
+        "grow-x": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" },
         },
-        "slide-up-fade": {
-          from: { opacity: "0", transform: "translateY(20px)" },
-          to: { opacity: "1", transform: "translateY(0)" },
+        "pulse-dot": {
+          "0%, 100%": { boxShadow: "0 0 0 0 hsl(var(--success) / 0.5)" },
+          "70%": { boxShadow: "0 0 0 5px hsl(var(--success) / 0)" },
         },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
-        "pulse-soft": "pulse-soft 2s ease-in-out infinite",
-        "slide-up": "slide-up 0.3s ease-out",
-        "pattern-shift": "pattern-shift 20s ease-in-out infinite",
-        "slide-up-fade": "slide-up-fade 0.6s ease-out backwards",
+        "fade-in": "fade-in 0.2s ease-out both",
+        "rise-in": "rise-in 0.25s cubic-bezier(0, 0, 0.2, 1) both",
+        "grow-x": "grow-x 0.5s cubic-bezier(0, 0, 0.2, 1) both",
+        "pulse-dot": "pulse-dot 2.4s ease-out infinite",
       },
     },
   },

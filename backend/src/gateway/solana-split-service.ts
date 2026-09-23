@@ -20,6 +20,7 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 function canonicalHash(request: GatewaySolanaSplitRequest): string {
+  const predictSources = [...(request.sourcePredictTransactions ?? [])].sort();
   return createHash("sha256").update(JSON.stringify([
     "ALPHABASKET_REMOTE_SOLANA_SPLIT_V1",
     request.deploymentMode,
@@ -35,6 +36,9 @@ function canonicalHash(request: GatewaySolanaSplitRequest): string {
     request.userAmountUnits.toString(10),
     request.creatorAmountUnits.toString(10),
     request.protocolAmountUnits.toString(10),
+    // Appended only when present so every pre-Predict request (and its
+    // replays) hashes exactly as it did before this field existed.
+    ...(predictSources.length === 0 ? [] : [predictSources]),
   ]), "utf8").digest("hex");
 }
 
@@ -237,7 +241,7 @@ export class SolanaUsdcSplitGateway {
     request: GatewaySolanaSplitRequest,
     total: bigint,
   ): Promise<readonly Readonly<{
-    kind: "bridge_receipt" | "jupiter_swap";
+    kind: "bridge_receipt" | "jupiter_swap" | "predict_order";
     reference: string;
     amountUnits: bigint;
   }>[]> {
@@ -263,7 +267,7 @@ export class SolanaUsdcSplitGateway {
       }
     }
     const capitalSources: {
-      kind: "bridge_receipt" | "jupiter_swap";
+      kind: "bridge_receipt" | "jupiter_swap" | "predict_order";
       reference: string;
       amountUnits: bigint;
     }[] = request.sourceBridgeTransaction === null
@@ -274,8 +278,13 @@ export class SolanaUsdcSplitGateway {
           amountUnits: bridgeAmount,
         }];
     const references = request.sourceJupiterTransactions ?? [];
-    if (new Set(references).size !== references.length) {
-      throw new Error("Solana split contains duplicate Jupiter transaction proofs");
+    const predictReferences = request.sourcePredictTransactions ?? [];
+    if (
+      new Set(references).size !== references.length ||
+      new Set(predictReferences).size !== predictReferences.length ||
+      predictReferences.some((reference) => references.includes(reference))
+    ) {
+      throw new Error("Solana split contains duplicate capital source proofs");
     }
     let jupiterAmount = 0n;
     for (const reference of references) {
@@ -303,7 +312,35 @@ export class SolanaUsdcSplitGateway {
         amountUnits: amount,
       });
     }
-    if (bridgeAmount + jupiterAmount + idleAmount !== total) {
+    let predictAmount = 0n;
+    for (const reference of predictReferences) {
+      const prepared = await this.store.findFinalizedByTransactionReference?.(
+        "predict_order",
+        reference,
+      );
+      if (prepared === undefined || prepared === null) {
+        throw new Error("Solana split Predict source is absent from the finalized gateway journal");
+      }
+      const side = prepared.result?.side;
+      const outputMint = prepared.result?.outputMint;
+      const output = prepared.result?.filledOutputUnits;
+      if (
+        side !== "sell" ||
+        outputMint !== this.options.usdcMint.toBase58() ||
+        typeof output !== "string" ||
+        !/^[1-9][0-9]*$/u.test(output)
+      ) {
+        throw new Error("Solana split Predict source journal is malformed or not a USDC sale");
+      }
+      const amount = BigInt(output);
+      predictAmount += amount;
+      capitalSources.push({
+        kind: "predict_order",
+        reference,
+        amountUnits: amount,
+      });
+    }
+    if (bridgeAmount + jupiterAmount + predictAmount + idleAmount !== total) {
       throw new Error("Solana split outputs do not reconcile with finalized hybrid sources");
     }
     return Object.freeze(capitalSources.map((source) =>

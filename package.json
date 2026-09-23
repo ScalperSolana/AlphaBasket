@@ -28,6 +28,7 @@
     "test:backend": "npm --prefix backend test",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "test:ui": "node scripts/ui-e2e/run.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -104,6 +105,7 @@
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
     "lovable-tagger": "^1.1.13",
+    "playwright": "^1.47.2",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",

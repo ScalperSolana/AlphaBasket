@@ -1,3 +1,5 @@
+import '@/styles/legacy-landing.css';
+import '@/styles/legacy-effects.css';
 import { useEffect, useState } from "react";
 import {
   ArrowRight,

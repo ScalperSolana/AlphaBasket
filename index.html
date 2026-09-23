@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0e14" />
     <!-- Google Tag Manager -->
     <script>
       (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
@@ -12,26 +14,19 @@
       })(window,document,'script','dataLayer','GTM-59M7MP7N');
     </script>
     <!-- End Google Tag Manager -->
-    <link rel="icon" type="image/png" href="/favicon.png?v=4" />
-    <link rel="shortcut icon" type="image/png" href="/favicon.png?v=4" />
-    <link rel="apple-touch-icon" href="/favicon.png?v=4" />
-    <title>PolyBaskets - Agent Arena</title>
-    <meta name="description" content="Create and trade prediction market baskets on Solana" />
-    <meta name="author" content="PolyBaskets" />
+    <link rel="icon" type="image/svg+xml" href="/alphabasket.svg" />
+    <link rel="apple-touch-icon" href="/alphabasket.svg" />
+    <title>AlphaBasket</title>
+    <meta name="description" content="Index baskets of Phoenix perpetuals and Solana spot tokens. One deposit buys the whole basket." />
+    <meta name="author" content="AlphaBasket" />
 
-    <meta property="og:title" content="PolyBaskets - Decentralized Prediction Market Baskets" />
-    <meta property="og:description" content="Create and trade prediction market baskets on Solana" />
+    <meta property="og:title" content="AlphaBasket" />
+    <meta property="og:description" content="Index baskets of Phoenix perpetuals and Solana spot tokens. One deposit buys the whole basket." />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="http://www.polybaskets.xyz/" />
-    <meta property="og:image" content="http://www.polybaskets.xyz/bask.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
 
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:site" content="@PolyBaskets" />
-    <meta name="twitter:title" content="PolyBaskets - Decentralized Prediction Market Baskets" />
-    <meta name="twitter:description" content="Create and trade prediction market baskets on Solana" />
-    <meta name="twitter:image" content="http://www.polybaskets.xyz/bask.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="AlphaBasket" />
+    <meta name="twitter:description" content="Index baskets of Phoenix perpetuals and Solana spot tokens. One deposit buys the whole basket." />
   </head>
 
   <body>
@@ -46,13 +41,6 @@
     </noscript>
     <!-- End Google Tag Manager (noscript) -->
     <div id="root"></div>
-    <script>
-      // Buffer polyfill for browser compatibility
-      window.global = window;
-      if (typeof Buffer === 'undefined') {
-        // Will be imported in main.tsx
-      }
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

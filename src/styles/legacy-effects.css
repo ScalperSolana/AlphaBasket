@@ -1,0 +1,335 @@
+/* Legacy PolyBaskets contest effects. Only the off-router contest pages import this. */
+  /* Scanline Effect (Terminal Aesthetic) */
+  .scanlines {
+    position: relative;
+  }
+
+  .scanlines::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      hsl(120 100% 50% / 0.03) 2px,
+      hsl(120 100% 50% / 0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+    animation: scanline-move 8s linear infinite;
+  }
+
+  @keyframes scanline-move {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(4px); }
+  }
+
+  /* Animated Grid Background */
+  .bg-pattern {
+    background-image: 
+      linear-gradient(hsl(120 100% 50% / 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(120 100% 50% / 0.05) 1px, transparent 1px);
+    background-size: 50px 50px;
+    background-position: 0 0, 0 0;
+    animation: grid-shift 20s linear infinite;
+    position: relative;
+  }
+
+  .bg-pattern::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: 
+      radial-gradient(circle at 20% 30%, hsl(120 100% 50% / 0.08) 0%, transparent 40%),
+      radial-gradient(circle at 80% 70%, hsl(35 100% 55% / 0.08) 0%, transparent 40%);
+    pointer-events: none;
+  }
+
+  @keyframes grid-shift {
+    0% { background-position: 0 0, 0 0; }
+    100% { background-position: 50px 50px, 50px 50px; }
+  }
+
+  /* Card elevation styles with neon borders */
+  .card-soft {
+    box-shadow: var(--shadow-soft);
+    @apply border border-border;
+  }
+  
+  .card-elevated {
+    box-shadow: var(--shadow-card);
+    @apply border border-primary/20 transition-all duration-300;
+    position: relative;
+  }
+
+  .card-elevated::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, hsl(120 100% 50% / 0.3), hsl(35 100% 55% / 0.3));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 ease-out;
+  }
+  
+  .card-hover:hover {
+    box-shadow: var(--shadow-elevated);
+    @apply -translate-y-1 scale-[1.01] border-primary/40;
+  }
+
+  .card-hover:hover::before {
+    opacity: 1;
+  }
+
+  .market-card-neutral {
+    box-shadow: 0 10px 28px -18px rgb(0 0 0 / 0.7), 0 0 0 1px hsl(220 15% 26% / 0.2);
+    @apply border-border/70;
+  }
+
+  .market-card-neutral::before {
+    background: linear-gradient(180deg, hsl(220 15% 24% / 0.22), hsl(220 14% 18% / 0.12));
+    opacity: 0.9;
+  }
+
+  .market-card-neutral:hover {
+    box-shadow: 0 14px 32px -20px rgb(0 0 0 / 0.75), 0 0 0 1px hsl(220 15% 30% / 0.35);
+    @apply border-primary/25;
+  }
+
+  .market-card-neutral:hover::before {
+    opacity: 1;
+  }
+
+  .market-live-panel {
+    border-color: hsl(var(--border) / 0.75);
+    background:
+      linear-gradient(180deg, hsl(220 18% 16% / 0.96) 0%, hsl(220 16% 14% / 0.96) 100%);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.03),
+      0 0 0 1px hsl(220 15% 26% / 0.12);
+  }
+
+  /* Logo glow effect - Neon Green */
+  .logo-glow {
+    filter: drop-shadow(0 0 12px hsl(120 100% 50% / 0.6));
+    transition: filter 0.3s ease;
+  }
+
+  .logo-glow:hover {
+    filter: drop-shadow(0 0 20px hsl(120 100% 50% / 0.9)) drop-shadow(0 0 30px hsl(120 100% 50% / 0.5));
+  }
+
+  /* Index number display - Subtle glow */
+  .index-display {
+    @apply text-4xl font-mono font-bold tracking-tight tabular-nums;
+    text-shadow: 
+      0 0 4px hsl(120 100% 50% / 0.5),
+      0 0 8px hsl(120 100% 50% / 0.3);
+    color: hsl(120 100% 50%);
+  }
+
+  /* Chip/badge for stats */
+  .stat-chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full;
+  }
+
+  .stat-chip-positive {
+    @apply bg-green-500/10 text-green-500 dark:bg-green-500/20 dark:text-green-400;
+  }
+
+  .stat-chip-neutral {
+    @apply bg-muted text-muted-foreground;
+  }
+
+  .stat-chip-negative {
+    @apply bg-destructive/10 text-destructive;
+  }
+
+  /* Network indicator */
+  .network-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  .network-dot-solana {
+    @apply bg-accent;
+  }
+
+  /* Staggered reveal animation with neon fade */
+  .reveal {
+    animation: slide-up-fade-neon 0.8s ease-out backwards;
+  }
+
+  .reveal-delay-1 { animation-delay: 0.1s; }
+  .reveal-delay-2 { animation-delay: 0.2s; }
+  .reveal-delay-3 { animation-delay: 0.3s; }
+  .reveal-delay-4 { animation-delay: 0.4s; }
+  .reveal-delay-5 { animation-delay: 0.5s; }
+
+  @keyframes slide-up-fade-neon {
+    from {
+      opacity: 0;
+      transform: translateY(30px) scale(0.95);
+      filter: blur(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+    }
+  }
+
+  /* Glitch effect for special moments */
+  .glitch {
+    position: relative;
+  }
+
+  .glitch::before,
+  .glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .glitch::before {
+    left: 2px;
+    text-shadow: -2px 0 hsl(120 100% 50%);
+    clip: rect(44px, 450px, 56px, 0);
+    animation: glitch-anim 5s infinite linear alternate-reverse;
+  }
+
+  .glitch::after {
+    left: -2px;
+    text-shadow: -2px 0 hsl(35 100% 55%), 2px 2px hsl(120 100% 50%);
+    animation: glitch-anim2 1s infinite linear alternate-reverse;
+  }
+
+  @keyframes glitch-anim {
+    0% { clip: rect(31px, 9999px, 94px, 0); }
+    20% { clip: rect(33px, 9999px, 14px, 0); }
+    40% { clip: rect(85px, 9999px, 2px, 0); }
+    60% { clip: rect(23px, 9999px, 58px, 0); }
+    80% { clip: rect(1px, 9999px, 94px, 0); }
+    100% { clip: rect(90px, 9999px, 98px, 0); }
+  }
+
+  @keyframes glitch-anim2 {
+    0% { clip: rect(65px, 9999px, 100px, 0); }
+    20% { clip: rect(41px, 9999px, 74px, 0); }
+    40% { clip: rect(66px, 9999px, 5px, 0); }
+    60% { clip: rect(83px, 9999px, 98px, 0); }
+    80% { clip: rect(40px, 9999px, 77px, 0); }
+    100% { clip: rect(25px, 9999px, 13px, 0); }
+  }
+
+  /* Neon gradient text - reduced glow */
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(120 100% 50%), hsl(35 100% 55%));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 3px hsl(120 100% 50% / 0.2));
+  }
+
+  /* Subtle text glow - reduced intensity */
+  .neon-text {
+    text-shadow: 
+      0 0 3px hsl(120 100% 50% / 0.4),
+      0 0 6px hsl(120 100% 50% / 0.2);
+    color: hsl(120 100% 50%);
+  }
+
+  .neon-text-amber {
+    text-shadow: 
+      0 0 3px hsl(35 100% 55% / 0.4),
+      0 0 6px hsl(35 100% 55% / 0.2);
+    color: hsl(35 100% 55%);
+  }
+
+  /* Enhanced button hover effects with neon */
+  .btn-primary {
+    @apply bg-primary text-primary-foreground;
+    transition: all 0.3s ease;
+    box-shadow: 0 0 10px hsl(120 100% 50% / 0.3);
+  }
+
+  .btn-primary:hover {
+    @apply shadow-lg;
+    transform: translateY(-1px);
+    box-shadow: 
+      0 0 20px hsl(120 100% 50% / 0.5),
+      0 0 40px hsl(120 100% 50% / 0.3),
+      0 8px 20px -4px hsl(120 100% 50% / 0.4);
+  }
+
+  /* Accent glow effect - Amber */
+  .accent-glow {
+    box-shadow: 0 0 20px hsl(35 100% 55% / 0.4);
+  }
+
+  .accent-glow:hover {
+    box-shadow: 0 0 30px hsl(35 100% 55% / 0.6), 0 0 50px hsl(35 100% 55% / 0.3);
+  }
+
+  /* Terminal cursor blink */
+  .cursor-blink::after {
+    content: '▊';
+    animation: blink 1s step-end infinite;
+    color: hsl(120 100% 50%);
+  }
+
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+/* ── Wallet connect button (Solana wallet-adapter trigger) ──
+   The button itself carries `.wallet-button-primary`; style it directly.
+   The wallet picker modal is styled by @solana/wallet-adapter-react-ui's own
+   stylesheet (imported in main.tsx) — do not override it globally here. */
+.wallet-button-primary {
+  min-height: 2.5rem !important;
+  padding: 0.5rem 1rem !important;
+  border-radius: calc(var(--radius) - 2px) !important;
+  border-color: hsl(var(--primary)) !important;
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  line-height: 1.25rem !important;
+  white-space: nowrap !important;
+  min-width: 0 !important;
+  transition: all 200ms ease !important;
+}
+
+.wallet-button-primary:hover {
+  background-color: hsl(var(--primary) / 0.9) !important;
+  box-shadow: 0 0 20px hsl(120 100% 50% / 0.4) !important;
+  transform: translateY(-2px) !important;
+}
+
+/* ── Price flash animations ── */
+@keyframes price-flash-green {
+  0% { color: hsl(142 71% 45%); text-shadow: 0 0 8px hsl(142 71% 45% / 0.6); }
+  50% { color: hsl(142 71% 65%); text-shadow: 0 0 12px hsl(142 71% 45% / 0.8); }
+  100% { color: inherit; text-shadow: none; }
+}
+@keyframes price-flash-red {
+  0% { color: hsl(0 84% 60%); text-shadow: 0 0 8px hsl(0 84% 60% / 0.6); }
+  50% { color: hsl(0 84% 70%); text-shadow: 0 0 12px hsl(0 84% 60% / 0.8); }
+  100% { color: inherit; text-shadow: none; }
+}
+.animate-price-flash-green { animation: price-flash-green 1.2s ease-out; }
+.animate-price-flash-red { animation: price-flash-red 1.2s ease-out; }
+

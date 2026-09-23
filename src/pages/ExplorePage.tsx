@@ -1,3 +1,4 @@
+import '@/styles/legacy-effects.css';
 import { MarketSearch } from '@/components/MarketSearch';
 import { useBasket } from '@/contexts/BasketContext';
 import { Link } from 'react-router-dom';
